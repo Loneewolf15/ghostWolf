@@ -294,23 +294,23 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
-function createLLM(settings) {
-  const provider = settings.provider;
+function getConfiguredProvider(p, settings) {
   const keys = settings.apiKeys || {};
-  let apiKey = keys[provider];
+  let apiKey = keys[p];
   let baseURL = '';
   let configurationError = '';
   const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
-  let model = (models[provider] || {})[tier];
-  if (provider === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
+  let model = (models[p] || {})[tier];
+  
+  if (p === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
     model = CURRENT_GEMINI_DEFAULT;
   }
-  if (!model) model = DEFAULT_MODELS[provider] || '';
-  const minimaxRegion = settings.minimaxRegion || 'global_en';
+  if (!model) model = DEFAULT_MODELS[p] || '';
+  
   const endpoint = settings.azureEndpoint || '';
 
-  if (provider === CUSTOM_PROVIDER) {
+  if (p === CUSTOM_PROVIDER) {
     try {
       const clientOptions = createCompatibleClientOptions(apiKey, settings.baseUrl);
       apiKey = clientOptions.apiKey;
@@ -321,18 +321,42 @@ function createLLM(settings) {
     if (!model && !configurationError) {
       configurationError = 'Set a Fast or Smart model for the Custom provider.';
     }
-  } else if (provider !== 'ollama' && !apiKey) {
+  } else if (p !== 'ollama' && !apiKey) {
     // Ollama is a local server: the field holds a URL, and no key is required.
-    configurationError = `Add your ${provider} API key in Settings.`;
+    configurationError = `Add your ${p} API key in Settings.`;
   }
 
   // Azure needs a second credential: the resource endpoint.
-  if (!configurationError && provider === 'azure' && !endpoint) {
+  if (!configurationError && p === 'azure' && !endpoint) {
     configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
   }
 
   const ready = !configurationError && !!model;
+  return { provider: p, model, apiKey, baseURL, endpoint, ready, configurationError };
+}
+
+function createLLM(settings) {
+  const selectedProvider = settings.provider;
+  const minimaxRegion = settings.minimaxRegion || 'global_en';
   const maxTokens = settings.smart ? 1400 : 700;
+
+  const PRIORITY = ['gemini', 'aerolink', 'openai', 'anthropic', 'groq', 'minimax', 'azure', CUSTOM_PROVIDER, 'ollama'];
+  const chain = [];
+  
+  // First, add the explicitly selected provider.
+  const mainConfig = getConfiguredProvider(selectedProvider, settings);
+  chain.push(mainConfig);
+
+  // Then scan the rest and add them if they are fully configured (ready).
+  for (const p of PRIORITY) {
+    if (p === selectedProvider) continue;
+    const config = getConfiguredProvider(p, settings);
+    if (config.ready) {
+      chain.push(config);
+    }
+  }
+
+  const { provider, model, apiKey, baseURL, ready, configurationError } = mainConfig;
 
   return {
     provider, model, apiKey, baseURL,
@@ -340,21 +364,42 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
-      try {
-        if (provider === 'openai') return await streamOpenAI(args);
-        if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
-        if (provider === 'ollama') return await streamOllama(args);
-        if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
-        if (provider === 'aerolink') return await streamOpenAI({ ...args, baseURL: 'https://api.aerolink.lat/v1' });
-        if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
-        if (provider === 'anthropic') return await streamAnthropic(args);
-        if (provider === 'gemini') return await streamGemini(args);
-        if (provider === 'azure') return await streamAzure(args);
-        throw new Error('unknown provider: ' + provider);
-      } catch (error) {
-        throw new Error(formatProviderErrorMessage(error, provider, model));
+      
+      const turns = sanitizeTurns(params.turns);
+      let lastError = null;
+
+      for (let i = 0; i < chain.length; i++) {
+        const c = chain[i];
+        if (!c.ready) continue; // Safety check; only mainConfig might not be ready
+        
+        const args = { apiKey: c.apiKey, baseURL: c.baseURL, endpoint: c.endpoint, model: c.model, maxTokens, ...params, turns };
+        
+        try {
+          if (c.provider === 'openai') return await streamOpenAI(args);
+          if (c.provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
+          if (c.provider === 'ollama') return await streamOllama(args);
+          if (c.provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
+          if (c.provider === 'aerolink') return await streamOpenAI({ ...args, baseURL: 'https://api.aerolink.lat/v1' });
+          if (c.provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
+          if (c.provider === 'anthropic') return await streamAnthropic(args);
+          if (c.provider === 'gemini') return await streamGemini(args);
+          if (c.provider === 'azure') return await streamAzure(args);
+          throw new Error('unknown provider: ' + c.provider);
+        } catch (error) {
+          lastError = error;
+          const isQuota = isQuotaError(error);
+          
+          if (isQuota && i < chain.length - 1) {
+            console.warn(`[LLM] ${c.provider} hit quota/rate-limit. Falling back to next provider in chain...`, error);
+            continue;
+          }
+          
+          throw new Error(formatProviderErrorMessage(error, c.provider, c.model));
+        }
       }
+      
+      if (lastError) throw new Error(formatProviderErrorMessage(lastError, provider, model));
+      throw new Error('No LLM providers configured.');
     }
   };
 }
