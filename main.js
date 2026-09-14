@@ -381,6 +381,10 @@ async function flushChannel(channel) {
       if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper), Deepgram, or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
       return;
     }
+    
+    // Circuit breaker: if we previously disabled STT due to repeated failures, stop hitting the API
+    if (sttDisabled) return;
+
     const res = await stt.transcribe(pcm);
     if (res.error) {
       handleSttError(res.error, settings);
