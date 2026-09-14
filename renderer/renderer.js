@@ -1284,6 +1284,7 @@
     $('#key-ollama').value = settings.apiKeys.ollama || '';
     $('#key-groq').value = settings.apiKeys.groq || '';
     $('#key-minimax').value = settings.apiKeys.minimax || '';
+    $('#key-aerolink').value = settings.apiKeys.aerolink || '';
     document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
     $('#key-azure').value = settings.apiKeys.azure || '';
     $('#azure-endpoint').value = settings.azureEndpoint || '';
@@ -1369,7 +1370,7 @@
 
   function statusText() {
     const k = settings.apiKeys;
-    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry' };
+    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry', aerolink: 'AeroLink' };
     const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
@@ -1558,6 +1559,7 @@
     settings.apiKeys.ollama = $('#key-ollama').value.trim();
     settings.apiKeys.groq = $('#key-groq').value.trim();
     settings.apiKeys.minimax = $('#key-minimax').value.trim();
+    settings.apiKeys.aerolink = $('#key-aerolink').value.trim();
     settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
