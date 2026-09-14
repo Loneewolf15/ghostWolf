@@ -14,6 +14,16 @@
 static XImage *(*real_XGetImage)(Display *display, Drawable d, int x, int y, unsigned int width, unsigned int height, unsigned long plane_mask, int format) = NULL;
 static Bool (*real_XShmGetImage)(Display *display, Drawable d, XImage *image, int x, int y, unsigned long plane_mask) = NULL;
 
+typedef void *(*dlsym_t)(void *, const char *);
+static dlsym_t get_real_dlsym() {
+    static dlsym_t real = NULL;
+    if (!real) {
+        real = (dlsym_t)dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+        if (!real) real = (dlsym_t)dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34");
+    }
+    return real;
+}
+
 // Helper to read the bounds of GhostWolf from /tmp/ghostwolf_bounds
 static void get_ghostwolf_bounds(int *gx, int *gy, int *gw, int *gh) {
     *gx = 0; *gy = 0; *gw = 0; *gh = 0;
@@ -93,7 +103,7 @@ static void mask_ximage(XImage *image, int x_offset, int y_offset) {
 
 XImage *XGetImage(Display *display, Drawable d, int x, int y, unsigned int width, unsigned int height, unsigned long plane_mask, int format) {
     if (!real_XGetImage) {
-        real_XGetImage = dlsym(RTLD_NEXT, "XGetImage");
+        real_XGetImage = get_real_dlsym()(RTLD_NEXT, "XGetImage");
     }
     
     XImage *image = real_XGetImage(display, d, x, y, width, height, plane_mask, format);
@@ -113,7 +123,7 @@ XImage *XGetImage(Display *display, Drawable d, int x, int y, unsigned int width
 
 Bool XShmGetImage(Display *display, Drawable d, XImage *image, int x, int y, unsigned long plane_mask) {
     if (!real_XShmGetImage) {
-        real_XShmGetImage = dlsym(RTLD_NEXT, "XShmGetImage");
+        real_XShmGetImage = get_real_dlsym()(RTLD_NEXT, "XShmGetImage");
     }
     
     Bool result = real_XShmGetImage(display, d, image, x, y, plane_mask);
@@ -130,4 +140,10 @@ Bool XShmGetImage(Display *display, Drawable d, XImage *image, int x, int y, uns
     }
     
     return result;
+}
+
+void *dlsym(void *handle, const char *symbol) {
+    if (strcmp(symbol, "XGetImage") == 0) return (void *)XGetImage;
+    if (strcmp(symbol, "XShmGetImage") == 0) return (void *)XShmGetImage;
+    return get_real_dlsym()(handle, symbol);
 }
