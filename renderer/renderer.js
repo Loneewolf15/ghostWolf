@@ -341,7 +341,7 @@
     updateQuestionReadyState();
     updateSendButtonState(); // FIX #9: Update send button state
 
-    // Reset the idle timer — after 2s of silence, check if question is complete
+    // Reset the idle timer — after silence, check if question is complete
     clearTimeout(questionFinalizeTimer);
     questionFinalizeTimer = setTimeout(() => {
       if (isLikelyCompleteQuestion(input.value)) {
@@ -350,7 +350,7 @@
         // Subtle notification that question is ready
         showToast('Press Enter to answer', 2500);
       }
-    }, 1800);
+    }, 800); // Reduced from 1800ms for faster, lower-latency interview detection
 
     // After 8s of no new words, save to history and keep stable
     clearTimeout(sttFillTimer);
@@ -389,7 +389,7 @@
     clearTimeout(softClearTimer);
     softClearTimer = setTimeout(() => {
       const speechDuration = userSpeechStart ? Date.now() - userSpeechStart : 0;
-      if (speechDuration > 2000) {
+      if (speechDuration > 1000) { // Reduced from 2000ms for snappier answers
         // User has been speaking for a while — they're answering, clear the box
         saveToQuestionHistory(input.value);
         input.value = '';
