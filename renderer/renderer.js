@@ -1683,6 +1683,18 @@
   const assistShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">↵</span>' : '<span class="kbd">⌘</span> <span class="kbd">↵</span>';
   const solveShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">H</span>' : '<span class="kbd">⌘</span> <span class="kbd">H</span>';
   const quitShortcut = isWindows ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">X</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">X</span>';
+  const stayHiddenStep = isLinux
+    ? {
+        icon: '🫥',
+        title: 'Stay hidden in Screen Shares',
+        body: 'On Linux, GhostWolf uses an advanced X11 hook to stay hidden. To cloak your browser or meeting app (like Chrome or Zoom), you must launch it with the GhostWolf cloak script.<br><br>Run <code>./scripts/ghost-cloak.sh google-chrome</code> in the GhostWolf folder to permanently cloak Chrome, or launch apps with <code>LD_PRELOAD=/path/to/libghost.so</code>.'
+      }
+    : {
+        icon: '🫥',
+        title: 'Stay hidden in Zoom',
+        body: 'GhostWolf is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals GhostWolf.'
+      };
+
   const OB_STEPS = [
     {
       icon: '👋',
@@ -1701,11 +1713,7 @@
       body: 'GhostWolf uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Azure AI Foundry</span>. Get a key from your provider, then paste it into GhostWolf\'s Settings.<br><br><strong>Tip:</strong> For the <em>best</em> real-time listening, add a <span class="hl">Deepgram</span> key (lowest latency streaming transcription). Otherwise, an OpenAI key enables streaming via the Realtime API, and Gemini/Whisper work as batch fallbacks.',
       buttons: [{ label: 'Open Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
-    {
-      icon: '🫥',
-      title: 'Stay hidden in Zoom',
-      body: 'GhostWolf is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals GhostWolf.'
-    },
+    stayHiddenStep,
     {
       icon: '✨',
       title: 'You’re all set',
