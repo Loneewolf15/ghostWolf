@@ -648,6 +648,17 @@
         micWorklet = new AudioWorkletNode(audioCtx, 'ghostwolf-audio-processor');
         micWorklet.port.onmessage = (e) => {
           ghostwolf.micPcm(e.data);
+          
+          // Audio Debug VU Meter
+          const pcm16 = new Int16Array(e.data);
+          let sumSquares = 0;
+          for (let i = 0; i < pcm16.length; i++) {
+            sumSquares += pcm16[i] * pcm16[i];
+          }
+          const rms = Math.sqrt(sumSquares / pcm16.length);
+          const db = Math.min(100, Math.max(0, (rms / 2500) * 100)); // Cap at 2500 for better visibility of normal speech
+          const meter = document.getElementById('audio-debug-meter');
+          if (meter) meter.style.width = db + '%';
         };
         source.connect(micWorklet);
         // Don't connect to destination — we just capture, don't play
@@ -662,8 +673,19 @@
         micProc.onaudioprocess = (e) => {
           const f = e.inputBuffer.getChannelData(0);
           const out = new Int16Array(f.length);
-          for (let i = 0; i < f.length; i++) { const s = Math.max(-1, Math.min(1, f[i])); out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; }
+          let sumSquares = 0;
+          for (let i = 0; i < f.length; i++) { 
+            const s = Math.max(-1, Math.min(1, f[i])); 
+            out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; 
+            sumSquares += out[i] * out[i];
+          }
           ghostwolf.micPcm(out.buffer);
+          
+          // Audio Debug VU Meter
+          const rms = Math.sqrt(sumSquares / f.length);
+          const db = Math.min(100, Math.max(0, (rms / 2500) * 100));
+          const meter = document.getElementById('audio-debug-meter');
+          if (meter) meter.style.width = db + '%';
         };
         micWorklet = { _legacy: true, proc: micProc, node: micNode, sink };
       }
@@ -959,10 +981,26 @@
     // Here we only start the mic (no gesture required) and stop everything on deactivate.
     if (active) {
       startMic();
+      
+      // Toggle VU meter visibility
+      const debugMeter = document.getElementById('audio-debug-container');
+      if (debugMeter) debugMeter.style.display = 'block';
+
+      // Explicit STT Mode toast
+      const k = settings.apiKeys || {};
+      const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
+      const sttMode = (settings.sttProvider === 'auto' || !settings.sttProvider) ? automaticStt : settings.sttProvider;
+      showToast(`Listening via ${sttMode}`, 3000);
+
       // Don't auto-open sidebar — user can toggle it manually
     } else {
       stopMic();
       stopSystemAudio();
+      
+      // Hide VU meter
+      const debugMeter = document.getElementById('audio-debug-container');
+      if (debugMeter) debugMeter.style.display = 'none';
+
       // FIX #2: Clear interim element when capture stops
       if (interimEl) {
         interimEl.textContent = '';
@@ -970,8 +1008,7 @@
       }
       // Don't auto-close sidebar — let user keep it open if they want
     }
-    updateSttStatus({ active, streaming });
-    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
+    
     if (active && mode === 'local') {
       sttState = 'local';
       const label = document.getElementById('stt-status');
