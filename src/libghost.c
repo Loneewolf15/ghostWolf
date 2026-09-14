@@ -25,21 +25,34 @@ static dlsym_t get_real_dlsym() {
 }
 
 // Helper to read the bounds of GhostWolf from /tmp/ghostwolf_bounds
-static void get_ghostwolf_bounds(int *gx, int *gy, int *gw, int *gh) {
+static void get_ghostwolf_bounds(Display *display, int *gx, int *gy, int *gw, int *gh) {
     *gx = 0; *gy = 0; *gw = 0; *gh = 0;
     FILE *f = fopen("/tmp/ghostwolf_bounds", "r");
     if (f) {
         fscanf(f, "%d,%d,%d,%d", gx, gy, gw, gh);
         fclose(f);
     }
+    if (*gw == 0 || *gh == 0) {
+        Atom prop = XInternAtom(display, "_GHOSTWOLF_BOUNDS", True);
+        if (prop != None) {
+            Atom actual_type;
+            int actual_format;
+            unsigned long nitems, bytes_after;
+            unsigned char *prop_data = NULL;
+            if (XGetWindowProperty(display, DefaultRootWindow(display), prop, 0, 32, False, AnyPropertyType, &actual_type, &actual_format, &nitems, &bytes_after, &prop_data) == Success && prop_data) {
+                sscanf((char *)prop_data, "%d,%d,%d,%d", gx, gy, gw, gh);
+                XFree(prop_data);
+            }
+        }
+    }
 }
 
 // Applies a solid black mask over the target region in an XImage
-static void mask_ximage(XImage *image, int x_offset, int y_offset) {
+static void mask_ximage(Display *display, XImage *image, int x_offset, int y_offset) {
     if (!image || !image->data) return;
 
     int gx, gy, gw, gh;
-    get_ghostwolf_bounds(&gx, &gy, &gw, &gh);
+    get_ghostwolf_bounds(display, &gx, &gy, &gw, &gh);
     
     if (gw == 0 || gh == 0) return; // GhostWolf not running or bounds invalid
 
@@ -114,7 +127,7 @@ XImage *XGetImage(Display *display, Drawable d, int x, int y, unsigned int width
     unsigned int rw, rh, bw, depth;
     if (XGetGeometry(display, d, &root, &rx, &ry, &rw, &rh, &bw, &depth)) {
         if (d == root) {
-            mask_ximage(image, x, y);
+            mask_ximage(display, image, x, y);
         }
     }
     
@@ -134,7 +147,7 @@ Bool XShmGetImage(Display *display, Drawable d, XImage *image, int x, int y, uns
         unsigned int rw, rh, bw, depth;
         if (XGetGeometry(display, d, &root, &rx, &ry, &rw, &rh, &bw, &depth)) {
             if (d == root) {
-                mask_ximage(image, x, y);
+                mask_ximage(display, image, x, y);
             }
         }
     }

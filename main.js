@@ -285,7 +285,11 @@ function createWindow() {
     if (process.platform !== 'linux') return;
     if (win && !win.isDestroyed()) {
       const b = win.getBounds();
-      try { fs.writeFileSync('/tmp/ghostwolf_bounds', `${b.x},${b.y},${b.width},${b.height}`); } catch (e) {}
+      try {
+        const boundsStr = `${b.x},${b.y},${b.width},${b.height}`;
+        fs.writeFileSync('/tmp/ghostwolf_bounds', boundsStr);
+        require('child_process').exec(`xprop -root -f _GHOSTWOLF_BOUNDS 8s -set _GHOSTWOLF_BOUNDS "${boundsStr}"`, () => {});
+      } catch (e) {}
     }
   };
   

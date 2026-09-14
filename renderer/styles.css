@@ -2043,3 +2043,8 @@ button:focus {
   justify-content: center;
   margin-top: 18px;
 }
+/* Hide scrollbars globally */
+::-webkit-scrollbar {
+  display: none;
+}
+
