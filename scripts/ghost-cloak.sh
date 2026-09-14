@@ -37,8 +37,8 @@ cp "$DESKTOP_FILE" "$TARGET_FILE"
 
 # Patch the Exec line
 # Replaces: Exec=/usr/bin/zoom %U
-# With: Exec=env LD_PRELOAD=/path/to/libghost.so /usr/bin/zoom %U
-sed -i -e "s|^Exec=\\(.*\\)|Exec=env LD_PRELOAD=${GHOST_LIB} \\1|g" "$TARGET_FILE"
+# With: Exec=env LD_PRELOAD=/path/to/libghost.so /usr/bin/zoom %U --disable-features=WebRtcPipeWireCapturer
+sed -i -e "s|^Exec=\\(.*\\)|Exec=env LD_PRELOAD=${GHOST_LIB} \\1 --disable-features=WebRtcPipeWireCapturer|g" "$TARGET_FILE"
 
 # Also remove DBus activation to force it to use the Exec line
 sed -i '/^DBusActivatable=/d' "$TARGET_FILE"
