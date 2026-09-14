@@ -154,8 +154,10 @@ async function startLocalWhisper(settings) {
       onError: (error) => {
         sttDisabled = true;
         console.log('[local-whisper] error', error && error.message);
+        if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
         send('stt:status', { provider: 'local', status: 'error' });
         send('status', { message: `Local transcription error: ${error.message}. Audio was not sent to a cloud fallback.` });
+        setCapturing(false);
       }
     });
 
@@ -420,11 +422,31 @@ function handleSttError(err, settings) {
   
   if (isQuota) {
     const s = store.getSettings();
-    if ((s.sttProvider || 'auto') !== 'local') {
-      s.sttProvider = 'local';
+    const STT_PRIORITY = ['deepgram', 'openai', 'groq', 'gemini', 'local'];
+    const keys = s.apiKeys || {};
+    let activeProvider = err.provider || s.sttProvider || 'auto';
+    
+    if (activeProvider === 'auto') {
+      activeProvider = keys.deepgram ? 'deepgram' : (keys.openai ? 'openai' : (keys.groq ? 'groq' : (keys.gemini ? 'gemini' : 'local')));
+    }
+
+    let currentIndex = STT_PRIORITY.indexOf(activeProvider);
+    if (currentIndex === -1) currentIndex = -1;
+    
+    let nextProvider = null;
+    for (let i = currentIndex + 1; i < STT_PRIORITY.length; i++) {
+      const p = STT_PRIORITY[i];
+      if (p === 'local' || keys[p]) {
+        nextProvider = p;
+        break;
+      }
+    }
+
+    if (nextProvider) {
+      s.sttProvider = nextProvider;
       store.setSettings(s);
       send('settings:sync', s);
-      send('status', { message: `Transcription switched to local model: your ${err.provider || 'cloud'} key hit a quota limit.` });
+      send('status', { message: `Transcription switched to ${nextProvider === 'local' ? 'local model' : nextProvider}: your ${activeProvider} key hit a quota limit.` });
       setCapturing(false).then(() => setCapturing(true));
       return;
     }
@@ -605,6 +627,14 @@ async function setCapturing(active) {
   return false;
 }
 
+function handleLlmFallback(newProvider, oldProvider) {
+  const s = store.getSettings();
+  s.provider = newProvider;
+  store.setSettings(s);
+  send('settings:sync', s);
+  send('status', { message: `AI switched to ${newProvider}: ${oldProvider} hit a quota limit.` });
+}
+
 // -------- feature runner --------
 async function runFeature(mode, userText) {
   if (state.busy) return;
@@ -614,7 +644,7 @@ async function runFeature(mode, userText) {
   let streamSettled = false; // drop stray tokens from a stream we've already abandoned
   try {
     const settings = store.getSettings();
-    const llm = createLLM(settings);
+    const llm = createLLM(settings, handleLlmFallback);
     const userBubble = def.userBubble !== null
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
@@ -763,7 +793,7 @@ ipcMain.handle('meetings:generate-notes', async (_e, id) => {
   const meeting = meetingStore.get(id);
   if (!meeting) return { error: 'Meeting not found.' };
   const settings = store.getSettings();
-  const llm = createLLM(settings);
+  const llm = createLLM(settings, handleLlmFallback);
   if (!llm.ready) return { error: llm.configurationError || 'LLM not configured.' };
   const prompt = buildNotesPrompt(meeting.transcript);
   let fullText;

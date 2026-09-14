@@ -335,7 +335,7 @@ function getConfiguredProvider(p, settings) {
   return { provider: p, model, apiKey, baseURL, endpoint, ready, configurationError };
 }
 
-function createLLM(settings) {
+function createLLM(settings, onFallback = () => {}) {
   const selectedProvider = settings.provider;
   const minimaxRegion = settings.minimaxRegion || 'global_en';
   const maxTokens = settings.smart ? 1400 : 700;
@@ -375,16 +375,20 @@ function createLLM(settings) {
         const args = { apiKey: c.apiKey, baseURL: c.baseURL, endpoint: c.endpoint, model: c.model, maxTokens, ...params, turns };
         
         try {
-          if (c.provider === 'openai') return await streamOpenAI(args);
-          if (c.provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
-          if (c.provider === 'ollama') return await streamOllama(args);
-          if (c.provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
-          if (c.provider === 'aerolink') return await streamOpenAI({ ...args, baseURL: 'https://api.aerolink.lat/v1' });
-          if (c.provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
-          if (c.provider === 'anthropic') return await streamAnthropic(args);
-          if (c.provider === 'gemini') return await streamGemini(args);
-          if (c.provider === 'azure') return await streamAzure(args);
-          throw new Error('unknown provider: ' + c.provider);
+          let res;
+          if (c.provider === 'openai') res = await streamOpenAI(args);
+          else if (c.provider === CUSTOM_PROVIDER) res = await streamOpenAI(args);
+          else if (c.provider === 'ollama') res = await streamOllama(args);
+          else if (c.provider === 'groq') res = await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
+          else if (c.provider === 'aerolink') res = await streamOpenAI({ ...args, baseURL: 'https://api.aerolink.lat/v1' });
+          else if (c.provider === 'minimax') res = await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
+          else if (c.provider === 'anthropic') res = await streamAnthropic(args);
+          else if (c.provider === 'gemini') res = await streamGemini(args);
+          else if (c.provider === 'azure') res = await streamAzure(args);
+          else throw new Error('unknown provider: ' + c.provider);
+          
+          if (i > 0) onFallback(c.provider, chain[0].provider);
+          return res;
         } catch (error) {
           lastError = error;
           const isQuota = isQuotaError(error);
