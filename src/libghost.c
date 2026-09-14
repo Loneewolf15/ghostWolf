@@ -128,6 +128,15 @@ XImage *XGetImage(Display *display, Drawable d, int x, int y, unsigned int width
     if (XGetGeometry(display, d, &root, &rx, &ry, &rw, &rh, &bw, &depth)) {
         if (d == root) {
             mask_ximage(display, image, x, y);
+        } else {
+            Window root_root;
+            int r_rx, r_ry;
+            unsigned int r_rw, r_rh, r_bw, r_depth;
+            if (XGetGeometry(display, root, &root_root, &r_rx, &r_ry, &r_rw, &r_rh, &r_bw, &r_depth)) {
+                if (rw == r_rw && rh == r_rh) {
+                    mask_ximage(display, image, x, y);
+                }
+            }
         }
     }
     
@@ -148,6 +157,15 @@ Bool XShmGetImage(Display *display, Drawable d, XImage *image, int x, int y, uns
         if (XGetGeometry(display, d, &root, &rx, &ry, &rw, &rh, &bw, &depth)) {
             if (d == root) {
                 mask_ximage(display, image, x, y);
+            } else {
+                Window root_root;
+                int r_rx, r_ry;
+                unsigned int r_rw, r_rh, r_bw, r_depth;
+                if (XGetGeometry(display, root, &root_root, &r_rx, &r_ry, &r_rw, &r_rh, &r_bw, &r_depth)) {
+                    if (rw == r_rw && rh == r_rh) {
+                        mask_ximage(display, image, x, y);
+                    }
+                }
             }
         }
     }

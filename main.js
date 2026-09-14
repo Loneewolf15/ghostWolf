@@ -288,8 +288,14 @@ function createWindow() {
       try {
         const boundsStr = `${b.x},${b.y},${b.width},${b.height}`;
         fs.writeFileSync('/tmp/ghostwolf_bounds', boundsStr);
-        require('child_process').exec(`xprop -root -f _GHOSTWOLF_BOUNDS 8s -set _GHOSTWOLF_BOUNDS "${boundsStr}"`, () => {});
-      } catch (e) {}
+        try {
+          require('child_process').execSync(`/usr/bin/xprop -root -f _GHOSTWOLF_BOUNDS 8s -set _GHOSTWOLF_BOUNDS "${boundsStr}"`);
+        } catch (xpropErr) {
+          console.error('[GhostWolf] Failed to set X11 root property:', xpropErr.message);
+        }
+      } catch (e) {
+        console.error('[GhostWolf] Failed to write bounds:', e.message);
+      }
     }
   };
   
