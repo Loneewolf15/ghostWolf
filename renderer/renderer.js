@@ -1304,6 +1304,98 @@
     });
   });
 
+  // ---- multi-key UI helpers -----------------------------------------------
+  const MULTI_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom', 'minimax', 'aerolink', 'ollama', 'groq', 'azure'];
+
+  /** Provider configs: placeholder and type */
+  const KEY_META = {
+    openai:    { type: 'password', placeholder: 'sk-...' },
+    anthropic: { type: 'password', placeholder: 'sk-ant-...' },
+    gemini:    { type: 'password', placeholder: 'AIza...' },
+    deepgram:  { type: 'password', placeholder: 'dg-...' },
+    custom:    { type: 'password', placeholder: 'optional bearer token' },
+    minimax:   { type: 'password', placeholder: 'MiniMax API key' },
+    aerolink:  { type: 'password', placeholder: 'sk-aerolink-...' },
+    ollama:    { type: 'text',     placeholder: 'http://localhost:11434' },
+    groq:      { type: 'password', placeholder: 'gsk_...' },
+    azure:     { type: 'password', placeholder: 'azure key or Entra token' },
+  };
+
+  /** Snapshot current inputs and write back to settings.apiKeys[provider] */
+  function saveMultiKeys(provider) {
+    const inputs = document.querySelectorAll(`.key-input-${provider}`);
+    const vals = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+    settings.apiKeys[provider] = provider === 'ollama' ? (vals[0] || '') : vals.join(',');
+  }
+
+  /** Render dynamic + / × key rows into #multi-key-{provider} */
+  function renderMultiKeys(provider) {
+    const container = document.getElementById(`multi-key-${provider}`);
+    if (!container) return;
+    const meta = KEY_META[provider] || { type: 'password', placeholder: 'api key' };
+    const rawStr = settings.apiKeys[provider] || '';
+    // Ollama only allows one URL; all others split on comma
+    const keys = (provider !== 'ollama' && rawStr.includes(','))
+      ? rawStr.split(',').map(s => s.trim())
+      : [rawStr];
+    if (keys.length === 0) keys.push('');
+
+    container.innerHTML = '';
+    keys.forEach((keyVal, index) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;width:100%;' + (index < keys.length - 1 ? 'margin-bottom:4px;' : '');
+
+      const inp = document.createElement('input');
+      inp.type = meta.type;
+      inp.placeholder = meta.placeholder;
+      inp.autocomplete = 'off';
+      inp.value = keyVal;
+      inp.className = `key-input-${provider}`;
+      inp.style.flex = '1';
+      row.appendChild(inp);
+
+      if (provider !== 'ollama') {
+        // + button on the last row
+        if (index === keys.length - 1) {
+          const addBtn = document.createElement('button');
+          addBtn.type = 'button';
+          addBtn.className = 's-action compact';
+          addBtn.style.cssText = 'margin-left:6px;padding:3px 8px;font-size:14px;line-height:1;';
+          addBtn.textContent = '+';
+          addBtn.title = 'Add a fallback key (used when current key hits rate limit)';
+          addBtn.onclick = () => {
+            saveMultiKeys(provider);
+            settings.apiKeys[provider] = (settings.apiKeys[provider] || '') + ',';
+            renderMultiKeys(provider);
+            // focus the newly created input
+            const inputs = container.querySelectorAll(`.key-input-${provider}`);
+            if (inputs.length) inputs[inputs.length - 1].focus();
+          };
+          row.appendChild(addBtn);
+        }
+        // × button when there's more than 1
+        if (keys.length > 1) {
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 's-action danger compact';
+          delBtn.style.cssText = 'margin-left:4px;padding:3px 8px;font-size:14px;line-height:1;';
+          delBtn.textContent = '×';
+          delBtn.title = 'Remove this key';
+          delBtn.onclick = () => {
+            saveMultiKeys(provider);
+            const current = settings.apiKeys[provider].split(',').map(s => s.trim());
+            current.splice(index, 1);
+            settings.apiKeys[provider] = current.join(',');
+            renderMultiKeys(provider);
+          };
+          row.appendChild(delBtn);
+        }
+      }
+
+      container.appendChild(row);
+    });
+  }
+
   function updateCustomProviderFields() {
     $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
   }
@@ -1311,19 +1403,10 @@
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
-    $('#key-openai').value = settings.apiKeys.openai || '';
-    $('#key-anthropic').value = settings.apiKeys.anthropic || '';
-    $('#key-gemini').value = settings.apiKeys.gemini || '';
-    $('#key-deepgram').value = settings.apiKeys.deepgram || '';
-    $('#key-custom').value = settings.apiKeys.custom || '';
+    MULTI_KEY_PROVIDERS.forEach(k => renderMultiKeys(k));
     $('#base-url').value = settings.baseUrl || '';
     updateCustomProviderFields();
-    $('#key-ollama').value = settings.apiKeys.ollama || '';
-    $('#key-groq').value = settings.apiKeys.groq || '';
-    $('#key-minimax').value = settings.apiKeys.minimax || '';
-    $('#key-aerolink').value = settings.apiKeys.aerolink || '';
     document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
-    $('#key-azure').value = settings.apiKeys.azure || '';
     $('#azure-endpoint').value = settings.azureEndpoint || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
@@ -1586,18 +1669,9 @@
   ghostwolf.on('whisper:models-changed', () => refreshWhisperModels());
 
   async function saveSettings() {
-    // Keys
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
-    settings.apiKeys.custom = $('#key-custom').value.trim();
+    // Keys: aggregate all multi-key inputs into comma-separated strings
+    MULTI_KEY_PROVIDERS.forEach(k => saveMultiKeys(k));
     settings.baseUrl = $('#base-url').value.trim();
-    settings.apiKeys.ollama = $('#key-ollama').value.trim();
-    settings.apiKeys.groq = $('#key-groq').value.trim();
-    settings.apiKeys.minimax = $('#key-minimax').value.trim();
-    settings.apiKeys.aerolink = $('#key-aerolink').value.trim();
-    settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
@@ -1726,7 +1800,8 @@
     ? {
         icon: '🫥',
         title: 'Stay hidden in Screen Shares',
-        body: 'On Linux, GhostWolf uses an advanced X11 hook to stay hidden. To cloak your browser or meeting app (like Chrome or Zoom), you must launch it with the GhostWolf cloak script.<br><br>Run <code>./scripts/ghost-cloak.sh google-chrome</code> in the GhostWolf folder to permanently cloak Chrome, or launch apps with <code>LD_PRELOAD=/path/to/libghost.so</code>.'
+        body: '<div id="linux-cloak-status">Configuring Linux stealth...</div>',
+        buttons: [] // Dynamically populated when status arrives
       }
     : {
         icon: '🫥',
@@ -1824,5 +1899,52 @@
     $('#live-dot').classList.toggle('off', !st.active);
     $('#stop-btn').classList.toggle('active', st.active);
     if (!settings.onboarded) showOnboard();
+
+    if (isLinux) {
+      ghostwolf.on('linux:cloak-result', (result) => {
+        const obStep = OB_STEPS.find(s => s.title === 'Stay hidden in Screen Shares');
+        if (!obStep) return;
+        
+        let html = 'GhostWolf uses an advanced X11 hook to stay hidden on Linux.<br><br>';
+        
+        if (!result.pathOk) {
+            html += '<span class="hl warning">⚠️ PATH Warning</span><br>GhostWolf wrote cloaking wrappers, but your PATH puts <code>/usr/bin</code> before <code>~/.local/bin</code>. Add <code>export PATH=~/.local/bin:$PATH</code> to your <code>~/.bashrc</code> to enable auto-cloaking.';
+        } else if (result.cloaked.length > 0 || result.skipped.length > 0) {
+            const apps = [...result.cloaked, ...result.skipped].join(', ');
+            html += `<span class="hl success">✓ Auto-cloaked</span><br>Wrappers installed for: <strong>${apps}</strong>.<br><br>Relaunch these apps from your application menu, or click the button below to restart Chrome now.`;
+            obStep.buttons = [{ 
+                label: 'Restart Chrome Cloaked', 
+                action: async () => {
+                    const btn = event.target;
+                    const oldText = btn.textContent;
+                    btn.textContent = 'Restarting...';
+                    btn.disabled = true;
+                    try {
+                        const res = await ghostwolf.linuxRecloakChrome();
+                        if (res.ok && res.relaunched) {
+                            btn.textContent = 'Restarted ✓';
+                        } else if (res.ok && !res.found) {
+                            btn.textContent = 'Chrome not running';
+                        } else {
+                            btn.textContent = 'Failed';
+                            console.error('Recloak failed:', res.error || res.reason);
+                        }
+                    } catch (e) {
+                        btn.textContent = 'Error';
+                    }
+                    setTimeout(() => { btn.textContent = oldText; btn.disabled = false; }, 3000);
+                } 
+            }];
+        } else if (result.snap.length > 0 || result.flatpak.length > 0) {
+             const sandboxed = [...result.snap, ...result.flatpak].join(', ');
+             html += `<span class="hl warning">⚠️ Sandboxed Install</span><br>${sandboxed} is installed via Snap/Flatpak. The sandbox blocks injection. See the README for the Xpra workaround.`;
+        } else {
+             html += 'No supported browsers (Chrome/Chromium) found to cloak.';
+        }
+        
+        obStep.body = html;
+        if (obIndex === OB_STEPS.indexOf(obStep)) renderOnboard();
+      });
+    }
   })();
 })();

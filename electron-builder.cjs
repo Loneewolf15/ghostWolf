@@ -76,5 +76,6 @@ module.exports = {
   linux: {
     target: [{ target: "AppImage", arch: ["x64", "arm64"] }],
     category: "Utility",
+    extraResources: ['libghost.so'],
   },
 };

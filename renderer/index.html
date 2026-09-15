@@ -63,6 +63,17 @@
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
                 <button id="history-btn" class="history-btn" title="View conversation history"><span class="ic"></span></button>
                 <button id="more-btn" class="more-btn" title="Settings"></button>
+                <button id="debug-btn" title="Debugger" style="
+                  background: none;
+                  border: none;
+                  cursor: pointer;
+                  font-size: 16px;
+                  line-height: 1;
+                  padding: 2px 4px;
+                  opacity: 0.55;
+                  transition: opacity 0.15s;
+                  border-radius: 4px;
+                " onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0.55'">&#x1F41E;</button>
                 <div class="spacer"></div>
                 <button id="send-btn" title="Send"></button>
               </div>
@@ -129,13 +140,13 @@
         </div>
 
         <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
-        <div class="s-field"><span>AeroLink</span><input id="key-aerolink" type="password" placeholder="aero_live_..." autocomplete="off" /></div>
+        <div class="s-field"><span>OpenAI</span><div id="multi-key-openai" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Anthropic</span><div id="multi-key-anthropic" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Gemini</span><div id="multi-key-gemini" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Deepgram</span><div id="multi-key-deepgram" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Custom</span><div id="multi-key-custom" class="multi-key-container"></div></div>
+        <div class="s-field"><span>MiniMax</span><div id="multi-key-minimax" class="multi-key-container"></div></div>
+        <div class="s-field"><span>AeroLink</span><div id="multi-key-aerolink" class="multi-key-container"></div></div>
 
         <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
         <div class="s-seg" id="minimax-region-seg">
@@ -148,9 +159,9 @@
           <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
           <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
         </div>
-        <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+        <div class="s-field"><span>Ollama URL</span><div id="multi-key-ollama" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Groq</span><div id="multi-key-groq" class="multi-key-container"></div></div>
+        <div class="s-field"><span>Azure AI Foundry</span><div id="multi-key-azure" class="multi-key-container"></div></div>
 
         <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (GhostWolf adds /openai/v1)</span></label>
         <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
@@ -307,5 +318,149 @@
 
   <script src="icons.js"></script>
   <script src="renderer.js"></script>
+
+  <!-- Debugger Panel: hidden by default, anchored to top-right of panel-wrap -->
+  <div id="gw-debug-panel" style="
+    display: none;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 340px;
+    max-height: calc(100vh - 80px);
+    background: rgba(10,12,16,0.97);
+    border: 1px solid rgba(255,255,255,0.13);
+    border-radius: 10px;
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 11px;
+    z-index: 9999;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.7);
+    pointer-events: auto;
+  ">
+    <div style="
+      display: flex;
+      align-items: center;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      gap: 6px;
+      user-select: none;
+    ">
+      <span style="font-size:13px;">&#x1F41E;</span>
+      <span style="flex:1; font-weight:600; color:#a3e635; font-size:11px; letter-spacing:0.4px;">GhostWolf Debugger</span>
+      <button id="gw-debug-copy" title="Copy all logs" style="
+        background: rgba(255,255,255,0.1); border: none; color: #ccc;
+        font-size: 10px; padding: 2px 7px; border-radius: 4px; cursor: pointer;
+      ">Copy</button>
+      <button id="gw-debug-clear" title="Clear logs" style="
+        background: rgba(255,255,255,0.1); border: none; color: #ccc;
+        font-size: 10px; padding: 2px 7px; border-radius: 4px; cursor: pointer;
+      ">Clear</button>
+      <button id="gw-debug-close" title="Close debugger" style="
+        background: rgba(255,255,255,0.1); border: none; color: #ccc;
+        font-size: 13px; padding: 0 6px; border-radius: 4px; cursor: pointer; line-height:1.5;
+      ">&times;</button>
+    </div>
+    <div id="gw-debug-log" style="
+      overflow-y: auto;
+      flex: 1;
+      padding: 6px 10px;
+      max-height: calc(100vh - 160px);
+      color: #d4d4d4;
+      line-height: 1.5;
+    "></div>
+  </div>
+
+  <script>
+  (function() {
+    const panel    = document.getElementById('gw-debug-panel');
+    const logEl    = document.getElementById('gw-debug-log');
+    const debugBtn = document.getElementById('debug-btn');
+    const closeBtn = document.getElementById('gw-debug-close');
+    const clearBtn = document.getElementById('gw-debug-clear');
+    const copyBtn  = document.getElementById('gw-debug-copy');
+    let logLines   = [];
+    let isOpen     = false;
+
+    function show() {
+      isOpen = true;
+      panel.style.display = 'flex';
+      // Make sure panel-wrap is position:relative so our absolute positioning works
+      const pw = document.getElementById('panel-wrap');
+      if (pw) pw.style.position = 'relative';
+      debugBtn.style.opacity = '1';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function hide() {
+      isOpen = false;
+      panel.style.display = 'none';
+      debugBtn.style.opacity = '0.55';
+    }
+
+    debugBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      isOpen ? hide() : show();
+    });
+    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); hide(); });
+    clearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      logEl.innerHTML = '';
+      logLines = [];
+    });
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = logLines.join('\n');
+      navigator.clipboard.writeText(text).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      });
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function appendLog(level, args) {
+      const ts = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const text = args.map(a => {
+        if (a instanceof Error) return a.message;
+        return typeof a === 'object' && a !== null ? JSON.stringify(a) : String(a);
+      }).join(' ');
+      const colors = { log:'#d4d4d4', warn:'#fbbf24', error:'#f87171', info:'#60a5fa' };
+      const icons  = { log:'&middot;', warn:'&#9888;', error:'&#10005;', info:'&#9432;' };
+      const div = document.createElement('div');
+      div.style.cssText = `padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);color:${colors[level]||'#d4d4d4'};word-break:break-word;`;
+      div.innerHTML = `<span style="opacity:0.45;">${ts}</span> <span>${icons[level]||'&middot;'}</span> ${escHtml(text)}`;
+      logEl.appendChild(div);
+      logLines.push(`[${ts}][${level.toUpperCase()}] ${text}`);
+      if (logLines.length > 600) { logLines.shift(); if (logEl.firstChild) logEl.removeChild(logEl.firstChild); }
+      if (isOpen) logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Intercept console
+    const orig = {};
+    ['log','warn','error','info'].forEach(lvl => {
+      orig[lvl] = console[lvl].bind(console);
+      console[lvl] = (...a) => { orig[lvl](...a); appendLog(lvl, a); };
+    });
+
+    window.addEventListener('error', e =>
+      appendLog('error', [`Uncaught: ${e.message} (${e.filename}:${e.lineno})`]));
+    window.addEventListener('unhandledrejection', e =>
+      appendLog('error', [`Promise rejected: ${e.reason}`]));
+
+    // Listen to IPC events forwarded by renderer
+    if (window.ghostwolf && window.ghostwolf.on) {
+      window.ghostwolf.on('status',    d => appendLog('info',  ['[status]',    d && d.message || JSON.stringify(d)]));
+      window.ghostwolf.on('stt:error', d => appendLog('error', ['[stt:error]', d && d.message || JSON.stringify(d)]));
+    }
+
+    appendLog('info', ['Debugger ready — click 🐞 to open/close']);
+  })();
+  </script>
 </body>
 </html>

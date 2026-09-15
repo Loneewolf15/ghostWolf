@@ -17,7 +17,7 @@ const KEYS_FILE = path.join(app.getPath('userData'), 'ghostwolf-keys.enc.json');
 const MAX_AI_RULES_CHARS = 2000;
 
 // All provider keys that must be encrypted. Anything not in this list is stored as-is.
-const API_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom', 'ollama', 'groq', 'minimax', 'azure'];
+const API_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom', 'ollama', 'groq', 'minimax', 'azure', 'aerolink'];
 
 const DEFAULTS = {
   provider: 'openai',
@@ -30,7 +30,7 @@ const DEFAULTS = {
   smart: false,
   baseUrl: '',
   minimaxRegion: 'global_en',
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', azure: '' },
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', azure: '', aerolink: '' },
   azureEndpoint: '',
   // Tab 2: Profile
   resumeText: '',
@@ -62,7 +62,8 @@ const DEFAULTS = {
     ollama: { fast: 'qwen2.5:0.5b', smart: 'llama3.2:1b' },
     groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
     minimax: { fast: 'MiniMax-M2.7', smart: 'MiniMax-M3' },
-    azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' }
+    azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
+    aerolink: { fast: 'gpt-4o-mini', smart: 'gpt-4o' }
   }
 };
 

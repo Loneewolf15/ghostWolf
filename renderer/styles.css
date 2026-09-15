@@ -2048,3 +2048,81 @@ button:focus {
   display: none;
 }
 
+
+/* Debugger */
+.debugger-panel {
+  position: absolute;
+  top: 40px;
+  right: 12px;
+  width: 250px;
+  background: rgba(10, 10, 10, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px;
+  color: #fff;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  z-index: 10000;
+  backdrop-filter: blur(10px);
+  -webkit-app-region: no-drag;
+}
+.debugger-panel.hidden {
+  display: none;
+}
+.db-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #a1a1aa;
+}
+.db-close {
+  background: none;
+  border: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.db-close:hover {
+  color: #fff;
+}
+.db-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.db-row span:first-child {
+  color: #71717a;
+}
+#db-audio-meter {
+  width: 100px;
+  -webkit-appearance: none;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  height: 8px;
+  margin-top: 2px;
+}
+#db-audio-meter::-webkit-meter-bar {
+  background: none;
+  border: none;
+}
+#db-audio-meter::-webkit-meter-optimum-value {
+  background: #10b981;
+}
+.db-log {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding-top: 8px;
+  height: 100px;
+  overflow-y: auto;
+  color: #10b981;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.db-log .err {
+  color: #ef4444;
+}
+.db-log .warn {
+  color: #f59e0b;
+}

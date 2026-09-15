@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   permissionsCheck: () => ipcRenderer.invoke('permissions:check'),
   permissionsRequest: () => ipcRenderer.invoke('permissions:request'),
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
+  linuxRecloakChrome: () => ipcRenderer.invoke('linux:recloak-chrome'),
   log: (msg) => ipcRenderer.send('log', msg),
   // Meeting persistence
   meetingsList: () => ipcRenderer.invoke('meetings:list'),
@@ -44,7 +45,7 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   meetingsRemove: (id) => ipcRenderer.invoke('meetings:remove', id),
   meetingsGenerateNotes: (id) => ipcRenderer.invoke('meetings:generate-notes', id),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token', 'linux:cloak-result'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

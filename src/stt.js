@@ -2,7 +2,7 @@
 // no audio API — we transcribe with whatever audio-capable key is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
-const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { formatProviderErrorMessage, isQuotaError, isConnectionError, CURRENT_GEMINI_DEFAULT } = require('./llm');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -94,17 +94,18 @@ function createSTT(settings) {
           if (looksLikeHallucination(text)) return { text: '', provider: c.p };
           return { text, provider: c.p };
         } catch (e) {
-          // Shares detection/wording with the LLM error path (src/llm.js) so a
           // 404 (dead/misspelled model) or 429 (quota) reads the same whether it
           // came from a chat request or a transcription request.
           const quota = isQuotaError(e);
+          const conn = isConnectionError(e);
           const message = formatProviderErrorMessage(e, c.p);
           lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p };
-          if (quota) {
+          if (quota || conn) {
             lastProvider = c.p;
-            disabledUntil = now + 30000;
-            break;
+            disabledUntil = now + (quota ? 30000 : 15000);
+            continue;
           }
+          break;
         }
       }
       return { text: '', error: lastErr };

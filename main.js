@@ -15,6 +15,7 @@ const { buildInterviewContext, detectCategory } = require('./src/interview-conte
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const { createMeetingStore } = require('./src/meetings');
 const { buildNotesPrompt, parseNotes } = require('./src/notes');
+const { autoCloak, recloakChrome } = process.platform === 'linux' ? require('./src/linux-cloak') : { autoCloak: null, recloakChrome: null };
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
@@ -56,6 +57,7 @@ let permWin = null;
 // -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
+let sttProviderKeyIndex = {}; // tracks which key index we're using for each provider (for multi-key rotation)
 const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
@@ -113,6 +115,27 @@ function getWhisperRuntime() {
   });
 }
 
+// Resolve absolute path to libghost.so regardless of run mode.
+// - Packaged AppImage: unpacked next to the app bundle (resourcesPath)
+// - Dev / from source: same directory as main.js (__dirname)
+// The wrapper is regenerated on every start so AppImage mount paths
+// (which change each launch) are always current.
+function getLibghostPath() {
+  const candidates = [
+    // Packaged build — electron-builder places it in resources/
+    app.isPackaged && path.join(process.resourcesPath, 'libghost.so'),
+    // Dev / from source
+    path.join(__dirname, 'libghost.so'),
+    // Fallback: next to the Electron binary
+    path.join(path.dirname(process.execPath), 'libghost.so'),
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (require('fs').existsSync(p)) return p;
+  }
+  return candidates[1]; // Return the dev path even if missing (module will report error)
+}
+
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
   const turn = { channel, text: text.trim(), ts: Date.now() };
@@ -155,6 +178,7 @@ async function startLocalWhisper(settings) {
         sttDisabled = true;
         console.log('[local-whisper] error', error && error.message);
         if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
+        handleSttError({ provider: 'local', message: error.message, status: 500, code: error.code || 'local_error' }, store.getSettings());
         send('stt:status', { provider: 'local', status: 'error' });
         send('status', { message: `Local transcription error: ${error.message}. Audio was not sent to a cloud fallback.` });
         setCapturing(false);
@@ -349,14 +373,78 @@ function createWindow() {
         message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
       });
     }
-    // Linux: setContentProtection is a no-op — let the user know
-    if (isLinux) {
-      setTimeout(() => {
-        win.webContents.send('status', {
-          type: 'warning',
-          message: 'Running on Linux. Ensure you launch your screen capture apps with LD_PRELOAD=/path/to/libghost.so to enable screen-share invisibility.'
+    // Linux: setContentProtection is a no-op — auto-inject libghost.so instead.
+    if (isLinux && autoCloak) {
+      const libPath = getLibghostPath();
+      autoCloak(libPath)
+        .then((result) => {
+          // Forward full result to renderer for onboarding UI.
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('linux:cloak-result', result);
+          }
+
+          // Build human-readable toast.
+          const cloakedNames = result.cloaked.join(', ');
+          const skippedNames = result.skipped.join(', ');
+          const snapNames    = result.snap.join(', ');
+          const flatpakNames = result.flatpak.join(', ');
+
+          if (!result.pathOk) {
+            // ~/.local/bin is not in PATH before /usr/bin — wrappers won't be picked up.
+            setTimeout(() => {
+              if (win && !win.isDestroyed())
+                win.webContents.send('status', {
+                  type: 'warning',
+                  message: `GhostWolf wrote cloaking wrappers but your PATH puts /usr/bin before ~/.local/bin. ` +
+                           `Add "export PATH=~/.local/bin:$PATH" to your ~/.bashrc (or ~/.profile) and log out/in, ` +
+                           `then relaunch for invisibility to take effect.`
+                });
+            }, 2000);
+            return;
+          }
+
+          if (result.cloaked.length > 0) {
+            setTimeout(() => {
+              if (win && !win.isDestroyed())
+                win.webContents.send('status', {
+                  type: 'success',
+                  message: `GhostWolf cloaked ${cloakedNames} — invisible to screen shares. ` +
+                           `Relaunch those apps from the application menu to activate.`
+                });
+            }, 2000);
+          } else if (result.skipped.length > 0 && result.snap.length === 0 && result.flatpak.length === 0) {
+            // Already up to date — silent (no toast needed on every start)
+            console.log('[GhostWolf] Linux cloak up to date for:', skippedNames);
+          }
+
+          if (snapNames || flatpakNames) {
+            const sandboxed = [snapNames, flatpakNames].filter(Boolean).join(', ');
+            setTimeout(() => {
+              if (win && !win.isDestroyed())
+                win.webContents.send('status', {
+                  type: 'warning',
+                  message: `${sandboxed} is installed as a Snap/Flatpak app — its sandbox blocks LD_PRELOAD injection. ` +
+                           `See the Linux section in the GhostWolf README for workarounds.`
+                });
+            }, 2500);
+          }
+
+          if (result.errors.length > 0) {
+            console.warn('[GhostWolf] Linux cloak errors:', result.errors);
+          }
+        })
+        .catch((err) => {
+          console.error('[GhostWolf] autoCloak failed:', err && err.message);
+          // Fallback to old warning so the user knows something is needed.
+          setTimeout(() => {
+            if (win && !win.isDestroyed())
+              win.webContents.send('status', {
+                type: 'warning',
+                message: 'Running on Linux. Screen-share cloaking setup encountered an error — ' +
+                         'run ./scripts/ghost-cloak.sh google-chrome manually if GhostWolf is visible.'
+              });
+          }, 2000);
         });
-      }, 2000);
     }
   });
   win.webContents.on('render-process-gone', (_e, d) => {
@@ -378,7 +466,17 @@ async function flushChannel(channel) {
   state.transcribing[channel] = true;
   try {
     const settings = store.getSettings();
-    const stt = createSTT(settings);
+    function getActiveKey(p, keys) {
+      const raw = keys[p] || '';
+      if (!raw.includes(',')) return raw;
+      const arr = raw.split(',').map(k => k.trim()).filter(Boolean);
+      return arr[sttProviderKeyIndex[p] || 0] || arr[0];
+    }
+    const activeKeys = { ...settings.apiKeys };
+    ['deepgram', 'openai', 'groq', 'gemini'].forEach(p => {
+      activeKeys[p] = getActiveKey(p, settings.apiKeys);
+    });
+    const stt = createSTT({ ...settings, apiKeys: activeKeys });
     if (!stt.available) {
       if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper), Deepgram, or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
       return;
@@ -418,9 +516,13 @@ function handleSttError(err, settings) {
     context: { provider: err.provider, status: err.status || null, alreadyDisabled: sttDisabled },
   });
   if (sttDisabled) return;
-  const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || (err.message && err.message.includes('Quota exceeded'));
+  const msg = String(err.message || '').toLowerCase();
+  const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || msg.includes('quota exceeded') ||
+                  msg.includes('timed out') || msg.includes('timeout') || msg.includes('fetch failed') ||
+                  msg.includes('etimedout') || msg.includes('econnrefused') || msg.includes('enotfound') ||
+                  msg.includes('network error') || msg.includes('socket hang up');
   
-  if (isQuota) {
+  if (isQuota || (err.provider === 'local' && err.status === 500)) {
     const s = store.getSettings();
     const STT_PRIORITY = ['deepgram', 'openai', 'groq', 'gemini', 'local'];
     const keys = s.apiKeys || {};
@@ -430,12 +532,24 @@ function handleSttError(err, settings) {
       activeProvider = keys.deepgram ? 'deepgram' : (keys.openai ? 'openai' : (keys.groq ? 'groq' : (keys.gemini ? 'gemini' : 'local')));
     }
 
+    const rawKeys = keys[activeProvider] || '';
+    const keyCount = (activeProvider !== 'local' && rawKeys.includes(',')) ? rawKeys.split(',').filter(k => k.trim()).length : 1;
+    
+    if ((sttProviderKeyIndex[activeProvider] || 0) < keyCount - 1) {
+      sttProviderKeyIndex[activeProvider] = (sttProviderKeyIndex[activeProvider] || 0) + 1;
+      send('status', { message: `Switching to alternate ${activeProvider} key due to quota limit, timeout, or connection error.` });
+      setCapturing(false).then(() => setCapturing(true));
+      return;
+    }
+
+    sttProviderKeyIndex[activeProvider] = 0; // reset for next time
+
     let currentIndex = STT_PRIORITY.indexOf(activeProvider);
-    if (currentIndex === -1) currentIndex = -1;
+    if (currentIndex === -1) currentIndex = STT_PRIORITY.indexOf('local');
     
     let nextProvider = null;
-    for (let i = currentIndex + 1; i < STT_PRIORITY.length; i++) {
-      const p = STT_PRIORITY[i];
+    for (let i = 1; i < STT_PRIORITY.length; i++) {
+      const p = STT_PRIORITY[(currentIndex + i) % STT_PRIORITY.length];
       if (p === 'local' || keys[p]) {
         nextProvider = p;
         break;
@@ -446,7 +560,7 @@ function handleSttError(err, settings) {
       s.sttProvider = nextProvider;
       store.setSettings(s);
       send('settings:sync', s);
-      send('status', { message: `Transcription switched to ${nextProvider === 'local' ? 'local model' : nextProvider}: your ${activeProvider} key hit a quota limit.` });
+      send('status', { message: `Transcription switched to ${nextProvider === 'local' ? 'local model' : nextProvider}: your ${activeProvider} provider hit a quota limit or failed.` });
       setCapturing(false).then(() => setCapturing(true));
       return;
     }
@@ -472,8 +586,22 @@ function initStreamingSTT() {
   const settings = store.getSettings();
   streamingMode = false;
 
+  
+  function getActiveKey(p, keys) {
+    const raw = keys[p] || '';
+    if (!raw.includes(',')) return raw;
+    const arr = raw.split(',').map(k => k.trim()).filter(Boolean);
+    return arr[sttProviderKeyIndex[p] || 0] || arr[0];
+  }
+  const activeKeys = { ...settings.apiKeys };
+  ['deepgram', 'openai', 'groq', 'gemini'].forEach(p => {
+    activeKeys[p] = getActiveKey(p, settings.apiKeys);
+  });
+  
+  const modifiedSettings = { ...settings, apiKeys: activeKeys };
+
   ['you', 'them'].forEach((channel) => {
-    const sttInstance = createStreamingSTT(settings, channel, {
+    const sttInstance = createStreamingSTT(modifiedSettings, channel, {
       onTranscript: (ch, text) => {
         const turn = { channel: ch, text, ts: Date.now() };
         pushTranscript(turn);
@@ -815,6 +943,19 @@ ipcMain.handle('meetings:generate-notes', async (_e, id) => {
   return { ok: true, notes };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+
+// -------- Linux cloak IPC --------
+// Called by the renderer's "Restart Chrome Cloaked" button.
+ipcMain.handle('linux:recloak-chrome', async () => {
+  if (!isLinux || !recloakChrome) return { ok: false, reason: 'not-linux' };
+  try {
+    const libPath = getLibghostPath();
+    const result = await recloakChrome(libPath);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, reason: err && err.message ? err.message : String(err) };
+  }
+});
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });

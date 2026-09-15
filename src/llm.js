@@ -294,45 +294,58 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
-function getConfiguredProvider(p, settings) {
+/**
+ * Returns an array of provider configs — one per API key.
+ * If the stored key is comma-separated (e.g. "gsk_1,gsk_2"), each key gets its own config object.
+ */
+function getConfiguredProviders(p, settings) {
   const keys = settings.apiKeys || {};
-  let apiKey = keys[p];
-  let baseURL = '';
-  let configurationError = '';
-  const tier = settings.smart ? 'smart' : 'fast';
-  const models = settings.models || {};
-  let model = (models[p] || {})[tier];
-  
-  if (p === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
-    model = CURRENT_GEMINI_DEFAULT;
-  }
-  if (!model) model = DEFAULT_MODELS[p] || '';
-  
-  const endpoint = settings.azureEndpoint || '';
+  const rawKey = (keys[p] || '').trim();
 
-  if (p === CUSTOM_PROVIDER) {
-    try {
-      const clientOptions = createCompatibleClientOptions(apiKey, settings.baseUrl);
-      apiKey = clientOptions.apiKey;
-      baseURL = clientOptions.baseURL;
-    } catch (error) {
-      configurationError = error.message;
+  // Ollama holds a single URL; all others can have comma-separated keys
+  const apiKeyList = (p !== 'ollama' && rawKey.includes(','))
+    ? rawKey.split(',').map(k => k.trim()).filter(Boolean)
+    : [rawKey];
+
+  if (apiKeyList.length === 0) apiKeyList.push('');
+
+  return apiKeyList.map(apiKey => {
+    let baseURL = '';
+    let configurationError = '';
+    const tier = settings.smart ? 'smart' : 'fast';
+    const models = settings.models || {};
+    let model = (models[p] || {})[tier];
+
+    if (p === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) model = CURRENT_GEMINI_DEFAULT;
+    if (!model) model = DEFAULT_MODELS[p] || '';
+
+    const endpoint = settings.azureEndpoint || '';
+
+    if (p === CUSTOM_PROVIDER) {
+      try {
+        const clientOptions = createCompatibleClientOptions(apiKey, settings.baseUrl);
+        apiKey = clientOptions.apiKey;
+        baseURL = clientOptions.baseURL;
+      } catch (error) {
+        configurationError = error.message;
+      }
+      if (!model && !configurationError) configurationError = 'Set a Fast or Smart model for the Custom provider.';
+    } else if (p !== 'ollama' && !apiKey) {
+      configurationError = `Add your ${p} API key in Settings.`;
     }
-    if (!model && !configurationError) {
-      configurationError = 'Set a Fast or Smart model for the Custom provider.';
+
+    if (!configurationError && p === 'azure' && !endpoint) {
+      configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
     }
-  } else if (p !== 'ollama' && !apiKey) {
-    // Ollama is a local server: the field holds a URL, and no key is required.
-    configurationError = `Add your ${p} API key in Settings.`;
-  }
 
-  // Azure needs a second credential: the resource endpoint.
-  if (!configurationError && p === 'azure' && !endpoint) {
-    configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
-  }
+    const ready = !configurationError && !!model;
+    return { provider: p, model, apiKey, baseURL, endpoint, ready, configurationError };
+  });
+}
 
-  const ready = !configurationError && !!model;
-  return { provider: p, model, apiKey, baseURL, endpoint, ready, configurationError };
+// Keep backward-compat name for any tests that call the singular form
+function getConfiguredProvider(p, settings) {
+  return getConfiguredProviders(p, settings)[0];
 }
 
 function createLLM(settings, onFallback = () => {}) {
@@ -342,20 +355,22 @@ function createLLM(settings, onFallback = () => {}) {
 
   const PRIORITY = ['gemini', 'aerolink', 'openai', 'anthropic', 'groq', 'minimax', 'azure', CUSTOM_PROVIDER, 'ollama'];
   const chain = [];
-  
-  // First, add the explicitly selected provider.
-  const mainConfig = getConfiguredProvider(selectedProvider, settings);
-  chain.push(mainConfig);
 
-  // Then scan the rest and add them if they are fully configured (ready).
+  // First, add all configs for the explicitly selected provider (one per key).
+  const mainConfigs = getConfiguredProviders(selectedProvider, settings);
+  chain.push(...mainConfigs);
+
+  // Then scan remaining providers and add any that are ready.
   for (const p of PRIORITY) {
     if (p === selectedProvider) continue;
-    const config = getConfiguredProvider(p, settings);
-    if (config.ready) {
-      chain.push(config);
+    const configs = getConfiguredProviders(p, settings);
+    for (const config of configs) {
+      if (config.ready) chain.push(config);
     }
   }
 
+  // Use the first config as the primary (for status / error reporting)
+  const mainConfig = mainConfigs[0] || {};
   const { provider, model, apiKey, baseURL, ready, configurationError } = mainConfig;
 
   return {
