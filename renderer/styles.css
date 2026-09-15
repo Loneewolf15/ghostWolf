@@ -2126,3 +2126,68 @@ button:focus {
 .db-log .warn {
   color: #f59e0b;
 }
+
+/* ── Renderer Privacy Mode ─────────────────────────────────────────────────
+ * html.privacy-mode hides GhostWolf's own sensitive content (AI responses,
+ * transcript) from the screen. On Windows/macOS this augments native capture
+ * protection. On Linux this is the only layer — it does NOT make the window
+ * invisible to OS-level capture tools (OBS, screen recorders, etc.).
+ */
+html.privacy-mode #messages,
+html.privacy-mode #transcript-sidebar {
+  visibility: hidden;
+}
+
+html.privacy-mode .privacy-placeholder {
+  display: flex;
+}
+
+/* Placeholder shown only when privacy-mode is active */
+.privacy-placeholder {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px 16px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.privacy-placeholder .privacy-icon {
+  font-size: 28px;
+  opacity: 0.6;
+}
+
+/* Privacy toggle button in toolbar */
+#privacy-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 7px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+#privacy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+#privacy-btn.active {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #f87171;
+}
+
+#privacy-btn.active:hover {
+  background: rgba(239, 68, 68, 0.25);
+}

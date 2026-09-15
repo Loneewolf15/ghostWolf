@@ -74,8 +74,7 @@ module.exports = {
     shortcutName: "ghostwolf",
   },
   linux: {
-    target: [{ target: "AppImage", arch: ["x64", "arm64"] }],
-    category: "Utility",
-    extraResources: ['libghost.so'],
+    target: [{ target: 'AppImage', arch: ['x64', 'arm64'] }],
+    category: 'Utility',
   },
 };

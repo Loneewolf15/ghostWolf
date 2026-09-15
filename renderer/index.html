@@ -21,6 +21,8 @@
       <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
       <div class="tb-divider"></div>
       <button class="tb-quit" id="quit-btn" title="Quit GhostWolf (⌘⇧X)"></button>
+      <div class="tb-divider"></div>
+      <button id="privacy-btn" title="Toggle privacy mode (hide sensitive content)">🔒 Hide</button>
     </div>
 
     <!-- Main assistant panel -->
@@ -35,6 +37,10 @@
           <!-- Left column: AI responses -->
           <div id="panel-main">
             <div id="messages"></div>
+          <div class="privacy-placeholder">
+            <span class="privacy-icon">🔒</span>
+            <span id="privacy-mode-label">Sensitive content hidden</span>
+          </div>
 
             <div id="action-row">
               <button class="act act-primary" data-mode="say"

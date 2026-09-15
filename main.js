@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const store = require('./src/store');
+const license = require('./src/license');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
@@ -15,7 +16,7 @@ const { buildInterviewContext, detectCategory } = require('./src/interview-conte
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const { createMeetingStore } = require('./src/meetings');
 const { buildNotesPrompt, parseNotes } = require('./src/notes');
-const { autoCloak, recloakChrome } = process.platform === 'linux' ? require('./src/linux-cloak') : { autoCloak: null, recloakChrome: null };
+const { createCapturePrivacy } = require('./src/capture-privacy');
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
@@ -32,6 +33,7 @@ const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
 
 let win = null;
+let capturePrivacy = null; // set in createWindow(), read by IPC handlers
 // Which global shortcuts ghostwolf actually holds. `globalShortcut.register` returns
 // false when another application already owns the combination, and nothing used
 // to look at that — so the only symptom was a key that did nothing. Iris reads
@@ -41,16 +43,8 @@ const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 
-// -------- Windows version helpers --------
-// WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+.
-// os.release() returns the NT kernel version e.g. "10.0.19041" or "10.0.22000" (Win11).
-function getWindowsBuild() {
-  if (!isWindows) return 0;
-  const parts = os.release().split('.').map(Number);
-  return parts[2] || 0; // third segment is the build number
-}
-const WIN_BUILD = getWindowsBuild();
-const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
+// (Windows version detection removed — Electron's setContentProtection() handles
+//  its own platform/build gates internally on Windows 10 build 19041+ and macOS.)
 
 let permWin = null;
 
@@ -115,26 +109,7 @@ function getWhisperRuntime() {
   });
 }
 
-// Resolve absolute path to libghost.so regardless of run mode.
-// - Packaged AppImage: unpacked next to the app bundle (resourcesPath)
-// - Dev / from source: same directory as main.js (__dirname)
-// The wrapper is regenerated on every start so AppImage mount paths
-// (which change each launch) are always current.
-function getLibghostPath() {
-  const candidates = [
-    // Packaged build — electron-builder places it in resources/
-    app.isPackaged && path.join(process.resourcesPath, 'libghost.so'),
-    // Dev / from source
-    path.join(__dirname, 'libghost.so'),
-    // Fallback: next to the Electron binary
-    path.join(path.dirname(process.execPath), 'libghost.so'),
-  ].filter(Boolean);
 
-  for (const p of candidates) {
-    if (require('fs').existsSync(p)) return p;
-  }
-  return candidates[1]; // Return the dev path even if missing (module will report error)
-}
 
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
@@ -262,16 +237,19 @@ function createWindow() {
   win.setBackgroundColor('#00000000');
   win.setSkipTaskbar(true);
 
-  // Fix 2: Only call setContentProtection if the OS supports it.
-  // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
-  // On older builds we skip it silently to avoid a no-op and send a warning to the renderer.
+  // Capture privacy: native on Windows/macOS, renderer-only on Linux.
+  // createCapturePrivacy() never modifies third-party processes or PATH.
+  capturePrivacy = createCapturePrivacy(win);
   const shouldProtect = !process.env.GHOSTWOLF_NO_PROTECT;
   if (shouldProtect) {
-    if (WIN_SUPPORTS_CONTENT_PROTECTION) {
-      win.setContentProtection(true);
+    const privacyResult = capturePrivacy.enable();
+    if (privacyResult.native) {
+      console.log(`[GhostWolf] Native capture protection enabled on ${process.platform}.`);
     } else {
-      // Will notify the renderer after it loads
-      console.log(`[GhostWolf] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
+      console.log(`[GhostWolf] Native capture protection unavailable on ${process.platform}.`);
+      if (process.platform === 'linux') {
+        console.log('[GhostWolf] Linux will use renderer-level privacy only.');
+      }
     }
   }
 
@@ -280,53 +258,16 @@ function createWindow() {
   if (isMac && typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', async () => {
-    // Capture clean background for libghost.so camouflage
-    try {
-        const primaryDisplay = screen.getPrimaryDisplay();
-        const { width, height } = primaryDisplay.size;
-        const sources = await desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width, height }
-        });
-        if (sources.length > 0) {
-            const bounds = win.getBounds();
-            // crop takes a rectangle in screen coordinates. We assume source[0] is the primary screen.
-            const cropped = sources[0].thumbnail.crop(bounds);
-            const bmp = cropped.toBitmap();
-            fs.writeFileSync('/tmp/ghostwolf_bg.raw', bmp);
-        }
-    } catch(e) {
-        console.error("Camouflage capture error:", e);
-    }
-    
-    // Ensure transparent background is fully applied
+  win.once('ready-to-show', () => {
+    // Ensure transparent background is fully applied before showing.
     setTimeout(() => {
       win.show();
     }, 100);
   });
 
+  // Save window position when the user moves the window.
   let moveSaveTimer = null;
-  const updateBounds = () => {
-    if (process.platform !== 'linux') return;
-    if (win && !win.isDestroyed()) {
-      const b = win.getBounds();
-      try {
-        const boundsStr = `${b.x},${b.y},${b.width},${b.height}`;
-        fs.writeFileSync('/tmp/ghostwolf_bounds', boundsStr);
-        try {
-          require('child_process').execSync(`/usr/bin/xprop -root -f _GHOSTWOLF_BOUNDS 8s -set _GHOSTWOLF_BOUNDS "${boundsStr}"`);
-        } catch (xpropErr) {
-          console.error('[GhostWolf] Failed to set X11 root property:', xpropErr.message);
-        }
-      } catch (e) {
-        console.error('[GhostWolf] Failed to write bounds:', e.message);
-      }
-    }
-  };
-  
   win.on('moved', () => {
-    updateBounds();
     clearTimeout(moveSaveTimer);
     moveSaveTimer = setTimeout(() => {
       if (win && !win.isDestroyed()) {
@@ -336,115 +277,17 @@ function createWindow() {
     }, 500);
   });
 
-  let camoUpdateTimer = null;
-  win.on('moved', () => {
-    clearTimeout(camoUpdateTimer);
-    camoUpdateTimer = setTimeout(async () => {
-      win.hide();
-      try {
-        const primaryDisplay = screen.getPrimaryDisplay();
-        const { width, height } = primaryDisplay.size;
-        const sources = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width, height }
-        });
-        if (sources.length > 0) {
-          const bounds = win.getBounds();
-          const cropped = sources[0].thumbnail.crop(bounds);
-          const bmp = cropped.toBitmap();
-          fs.writeFileSync('/tmp/ghostwolf_bg.raw', bmp);
-        }
-      } catch (e) {}
-      win.show();
-    }, 500);
-  });
-  
-  win.on('resized', updateBounds);
-  win.once('ready-to-show', updateBounds);
-
-  win.setTitle('Microsoft Edge Update'); // set before load
+  win.setTitle('GhostWolf'); // set before load
 
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
-    win.setTitle('Microsoft Edge Update');
-    // Warn about missing content protection on old Windows builds
-    if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
-      send('status', {
-        message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
-      });
-    }
-    // Linux: setContentProtection is a no-op — auto-inject libghost.so instead.
-    if (isLinux && autoCloak) {
-      const libPath = getLibghostPath();
-      autoCloak(libPath)
-        .then((result) => {
-          // Forward full result to renderer for onboarding UI.
-          if (win && !win.isDestroyed()) {
-            win.webContents.send('linux:cloak-result', result);
-          }
-
-          // Build human-readable toast.
-          const cloakedNames = result.cloaked.join(', ');
-          const skippedNames = result.skipped.join(', ');
-          const snapNames    = result.snap.join(', ');
-          const flatpakNames = result.flatpak.join(', ');
-
-          if (!result.pathOk) {
-            // ~/.local/bin is not in PATH before /usr/bin — wrappers won't be picked up.
-            setTimeout(() => {
-              if (win && !win.isDestroyed())
-                win.webContents.send('status', {
-                  type: 'warning',
-                  message: `GhostWolf wrote cloaking wrappers but your PATH puts /usr/bin before ~/.local/bin. ` +
-                           `Add "export PATH=~/.local/bin:$PATH" to your ~/.bashrc (or ~/.profile) and log out/in, ` +
-                           `then relaunch for invisibility to take effect.`
-                });
-            }, 2000);
-            return;
-          }
-
-          if (result.cloaked.length > 0) {
-            setTimeout(() => {
-              if (win && !win.isDestroyed())
-                win.webContents.send('status', {
-                  type: 'success',
-                  message: `GhostWolf cloaked ${cloakedNames} — invisible to screen shares. ` +
-                           `Relaunch those apps from the application menu to activate.`
-                });
-            }, 2000);
-          } else if (result.skipped.length > 0 && result.snap.length === 0 && result.flatpak.length === 0) {
-            // Already up to date — silent (no toast needed on every start)
-            console.log('[GhostWolf] Linux cloak up to date for:', skippedNames);
-          }
-
-          if (snapNames || flatpakNames) {
-            const sandboxed = [snapNames, flatpakNames].filter(Boolean).join(', ');
-            setTimeout(() => {
-              if (win && !win.isDestroyed())
-                win.webContents.send('status', {
-                  type: 'warning',
-                  message: `${sandboxed} is installed as a Snap/Flatpak app — its sandbox blocks LD_PRELOAD injection. ` +
-                           `See the Linux section in the GhostWolf README for workarounds.`
-                });
-            }, 2500);
-          }
-
-          if (result.errors.length > 0) {
-            console.warn('[GhostWolf] Linux cloak errors:', result.errors);
-          }
-        })
-        .catch((err) => {
-          console.error('[GhostWolf] autoCloak failed:', err && err.message);
-          // Fallback to old warning so the user knows something is needed.
-          setTimeout(() => {
-            if (win && !win.isDestroyed())
-              win.webContents.send('status', {
-                type: 'warning',
-                message: 'Running on Linux. Screen-share cloaking setup encountered an error — ' +
-                         'run ./scripts/ghost-cloak.sh google-chrome manually if GhostWolf is visible.'
-              });
-          }, 2000);
-        });
+    win.setTitle('GhostWolf');
+    // On Linux, inform the renderer that only renderer-level privacy is available.
+    if (isLinux && shouldProtect) {
+      const privacyStatus = capturePrivacy.status();
+      if (!privacyStatus.supported) {
+        console.log('[GhostWolf] Linux: renderer-level privacy mode only (Electron does not expose native capture exclusion).');
+      }
     }
   });
   win.webContents.on('render-process-gone', (_e, d) => {
@@ -895,8 +738,6 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
 });
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
-  winBuild: WIN_BUILD,
-  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
@@ -944,17 +785,19 @@ ipcMain.handle('meetings:generate-notes', async (_e, id) => {
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 
-// -------- Linux cloak IPC --------
-// Called by the renderer's "Restart Chrome Cloaked" button.
-ipcMain.handle('linux:recloak-chrome', async () => {
-  if (!isLinux || !recloakChrome) return { ok: false, reason: 'not-linux' };
-  try {
-    const libPath = getLibghostPath();
-    const result = await recloakChrome(libPath);
-    return { ok: true, ...result };
-  } catch (err) {
-    return { ok: false, reason: err && err.message ? err.message : String(err) };
-  }
+// -------- Capture privacy IPC --------
+// Renderer can query/toggle content protection state via these handlers.
+ipcMain.handle('capture-privacy:status', () => {
+  if (!capturePrivacy) return { supported: false, enabled: false, platform: process.platform };
+  return capturePrivacy.status();
+});
+ipcMain.handle('capture-privacy:enable', () => {
+  if (!capturePrivacy) return { supported: false, enabled: false, platform: process.platform };
+  return capturePrivacy.enable();
+});
+ipcMain.handle('capture-privacy:disable', () => {
+  if (!capturePrivacy) return { supported: false, enabled: false, platform: process.platform };
+  return capturePrivacy.disable();
 });
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
@@ -1007,6 +850,22 @@ ipcMain.on('permissions:continue', async () => {
     if (permWin) { permWin.close(); permWin = null; }
     launchApp();
   }
+});
+
+// -------- license ipc --------
+ipcMain.handle('license:get-hardware-id', () => license.getHardwareId());
+ipcMain.handle('license:verify', (_e, key) => {
+  const isValid = license.verifyLicense(key);
+  if (isValid) {
+    license.saveLicense(key);
+    if (activationWin) {
+      activationWin.close();
+      activationWin = null;
+    }
+    // Proceed with the normal launch
+    startNormalBootSequence();
+  }
+  return isValid;
 });
 
 // -------- shortcuts --------
@@ -1076,6 +935,34 @@ async function requestPermissions() {
 
   const status = await getPermissionStatus();
   return status.mic === 'granted' && status.screen === 'granted';
+}
+
+let activationWin = null;
+
+function createActivationWindow() {
+  const { workArea } = screen.getPrimaryDisplay();
+  const W = 400, H = 350;
+  activationWin = new BrowserWindow({
+    width: W,
+    height: H,
+    x: Math.round(workArea.x + (workArea.width - W) / 2),
+    y: Math.round(workArea.y + (workArea.height - H) / 2),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: true,
+    resizable: false,
+    skipTaskbar: false,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    }
+  });
+  activationWin.loadFile(path.join(__dirname, 'renderer', 'activation.html'));
+  activationWin.webContents.on('did-finish-load', () => activationWin.show());
 }
 
 function createPermissionsWindow() {
@@ -1158,24 +1045,35 @@ if (!isWindows && !isMac) {
 }
 
 app.whenReady().then(async () => {
-  app.setName('MicrosoftEdgeUpdate');
-  if (isWindows) {
-    process.title = 'MicrosoftEdgeUpdate';
+  app.setName('GhostWolf');
+
+  // Feature flag for hardware activation
+  const ENABLE_ACTIVATION = process.env.GHOSTWOLF_REQUIRE_ACTIVATION === 'true';
+
+  // Intercept boot: check license if activation is enabled
+  if (ENABLE_ACTIVATION && !license.loadAndVerifyLicense()) {
+    createActivationWindow();
+    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && !activationWin) createActivationWindow(); });
+    return;
   }
 
+  startNormalBootSequence();
+});
+
+async function startNormalBootSequence() {
   if (isMac) {
     const allGranted = await requestPermissions();
     if (!allGranted) {
       // Show the permissions gate — the dock stays visible so the user can find the app
       createPermissionsWindow();
-      app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createPermissionsWindow(); });
+      app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && !permWin) createPermissionsWindow(); });
       return;
     }
   }
 
   launchApp();
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-});
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && !permWin && !activationWin) createWindow(); });
+}
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();

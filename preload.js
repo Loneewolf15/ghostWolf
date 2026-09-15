@@ -31,10 +31,11 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   appLinkConsentRespond: (id, allowed) => ipcRenderer.send('applink:consent-response', { id, allowed }),
   pickProfileDocument: () => ipcRenderer.invoke('profile:pickDocument'),
   quit: () => ipcRenderer.send('app:quit'),
+  getHardwareId: () => ipcRenderer.invoke('license:get-hardware-id'),
+  verifyAndSaveLicense: (key) => ipcRenderer.invoke('license:verify', key),
   permissionsCheck: () => ipcRenderer.invoke('permissions:check'),
   permissionsRequest: () => ipcRenderer.invoke('permissions:request'),
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
-  linuxRecloakChrome: () => ipcRenderer.invoke('linux:recloak-chrome'),
   log: (msg) => ipcRenderer.send('log', msg),
   // Meeting persistence
   meetingsList: () => ipcRenderer.invoke('meetings:list'),
@@ -45,8 +46,16 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   meetingsRemove: (id) => ipcRenderer.invoke('meetings:remove', id),
   meetingsGenerateNotes: (id) => ipcRenderer.invoke('meetings:generate-notes', id),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token', 'linux:cloak-result'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }
+});
+
+// Capture-privacy bridge — separate from the main ghostwolf API so it is
+// easy to tree-shake or replace when a native Linux backend is added.
+contextBridge.exposeInMainWorld('ghostwolfPrivacy', {
+  status:  () => ipcRenderer.invoke('capture-privacy:status'),
+  enable:  () => ipcRenderer.invoke('capture-privacy:enable'),
+  disable: () => ipcRenderer.invoke('capture-privacy:disable'),
 });

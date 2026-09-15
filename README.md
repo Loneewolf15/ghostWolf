@@ -31,7 +31,7 @@ GhostWolf floats a small glass panel on top of everything. It takes **three sepa
 | **Solve a coding problem** | `⌘` `H` (macOS) or `Ctrl` `H` (Windows) | your screen only |
 | **Smart** toggle | pill in the box | switches to a smarter (slower) model |
 
-It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution), and it's designed to be **invisible in screen shares** so it stays your private assistant.
+It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution). On Windows and macOS it uses native OS APIs to stay **hidden from screen shares**. On Linux, a renderer-level **Privacy Mode** hides GhostWolf's own content — see the platform table below.
 
 ### Platform support
 
@@ -50,8 +50,8 @@ It's a copilot for **live meetings** ("what do I say to that?") and **coding pro
 > [!NOTE]
 > **Linux: meeting audio requires PipeWire.** On Ubuntu 23.04+ with PipeWire, selecting "Share audio" in the `getDisplayMedia` dialog will capture system audio. On older Ubuntu/Debian with only PulseAudio, the *Them* channel stays silent. Your screen and mic still work on all distributions.
 
-> [!WARNING]
-> **Linux: GhostWolf hides via OS-level MITM.** Electron's `setContentProtection` does not work on Linux. Instead, GhostWolf uses a custom PipeWire Virtual Screen node (or `LD_PRELOAD` X11 hook) to perfectly mask itself from screen sharing in apps like Zoom, Teams, and Discord.
+> [!NOTE]
+> **Linux: Privacy Mode hides GhostWolf's own content.** Electron does not expose native screen-capture exclusion on Linux (neither X11 nor Wayland). GhostWolf's **Privacy Mode** (🔒 button in toolbar, or `Ctrl`+`Shift`+`P`) hides the AI responses and transcript from view — but the window itself remains visible to OS-level screen recorders (OBS, screenshot tools, etc.). No `LD_PRELOAD`, no Chrome/Zoom/Teams modification, no false claims of invisibility.
 
 ---
 

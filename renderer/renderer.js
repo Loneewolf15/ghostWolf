@@ -1774,6 +1774,95 @@
     if (e.key === 'Escape' && pendingConsentId) { e.preventDefault(); answerConsent(false); }
   });
 
+  // ── Renderer Privacy Mode ────────────────────────────────────────────────
+  // Toggles html.privacy-mode which hides sensitive content (messages,
+  // transcript) from the screen.
+  //
+  // On Windows/macOS this augments native Electron capture protection.
+  // On Linux this is the ONLY layer — it does not exclude the window from
+  // OS-level screen capture (OBS, screenshot tools, etc.).
+  //
+  // The IPC calls to main are fire-and-forget (we don't block the UI on the
+  // result) but we do log the result so it is visible in DevTools.
+  let privacyEnabled = false;
+
+  const privacyBtn = $('#privacy-btn');
+
+  // Label is platform-aware so it never misleads Linux users.
+  function updatePrivacyBtn() {
+    if (privacyEnabled) {
+      // Active state
+      if (isLinux) {
+        privacyBtn.textContent = '\uD83D\uDD13 Privacy Off';
+      } else {
+        privacyBtn.textContent = '\uD83D\uDD13 Unprotect';
+      }
+      privacyBtn.classList.add('active');
+      privacyBtn.title = isLinux
+        ? 'Linux: hides sensitive GhostWolf content in the app. The GhostWolf window itself remains visible to screen capture.'
+        : 'Screen capture protection is active. Click to disable.';
+    } else {
+      if (isLinux) {
+        privacyBtn.textContent = '\uD83D\uDD12 Privacy';
+      } else {
+        privacyBtn.textContent = '\uD83D\uDD12 Protect';
+      }
+      privacyBtn.classList.remove('active');
+      privacyBtn.title = isLinux
+        ? 'Linux: hides sensitive GhostWolf content in the app. The GhostWolf window itself remains visible to screen capture.'
+        : 'Enable screen capture protection and hide sensitive content.';
+    }
+
+    // Update placeholder label too
+    const lbl = $('#privacy-mode-label');
+    if (lbl) {
+      lbl.textContent = isLinux
+        ? 'Sensitive content hidden \u2014 window still visible to screen recorders'
+        : 'Screen capture protection active';
+    }
+  }
+
+  async function setPrivacyMode(enable) {
+    privacyEnabled = enable;
+    document.documentElement.classList.toggle('privacy-mode', enable);
+    updatePrivacyBtn();
+
+    // Inform main process so native protection follows the same toggle.
+    if (window.ghostwolfPrivacy) {
+      try {
+        const result = await (enable
+          ? window.ghostwolfPrivacy.enable()
+          : window.ghostwolfPrivacy.disable());
+        console.log('[GhostWolf] privacy IPC result:', JSON.stringify(result));
+        
+        if (result.error && !isLinux) {
+           privacyBtn.textContent = '⚠️ Protection failed';
+           privacyBtn.title = 'Native screen capture protection failed: ' + result.error;
+           privacyBtn.classList.remove('active');
+           // Keep CSS privacy-mode as fallback
+        }
+      } catch (err) {
+        console.error('[GhostWolf] privacy IPC error:', err);
+        if (!isLinux) {
+           privacyBtn.textContent = '⚠️ IPC Error';
+           privacyBtn.title = 'Failed to communicate with main process: ' + err.message;
+           privacyBtn.classList.remove('active');
+        }
+      }
+    }
+  }
+
+  privacyBtn.addEventListener('click', () => setPrivacyMode(!privacyEnabled));
+
+  // Keyboard shortcut: Ctrl+Shift+P / Cmd+Shift+P
+  document.addEventListener('keydown', (e) => {
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (mod && e.shiftKey && e.key === 'P') {
+      e.preventDefault();
+      setPrivacyMode(!privacyEnabled);
+    }
+  });
+
   // ---- onboarding / first-run tutorial -----------------------------------
   const obScrim = $('#onboard-scrim');
   const permissionHelp = isWindows
@@ -1798,15 +1887,17 @@
   const quitShortcut = isWindows ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">X</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">X</span>';
   const stayHiddenStep = isLinux
     ? {
-        icon: '🫥',
-        title: 'Stay hidden in Screen Shares',
-        body: '<div id="linux-cloak-status">Configuring Linux stealth...</div>',
-        buttons: [] // Dynamically populated when status arrives
+        icon: '\uD83D\uDD12',
+        title: 'Privacy Mode on Linux',
+        body: 'GhostWolf includes a <strong>Privacy Mode</strong> that hides sensitive content (AI responses, transcript) from view. Click the <strong>\uD83D\uDD12 Hide</strong> button in the toolbar or press <span class="kbd">Ctrl</span><span class="kbd">\u21E7</span><span class="kbd">P</span> to toggle it.<br><br>' +
+              '<span class="hl warning">Linux note:</span> Privacy Mode hides GhostWolf\'s own UI — it does <strong>not</strong> exclude the window from OS-level screen recorders (OBS, screenshot tools). ' +
+              'Electron does not currently expose native capture exclusion on Linux. This is an honest limitation, not a workaround.',
+        buttons: []
       }
     : {
-        icon: '🫥',
+        icon: '\uD83E\uDEB7',
         title: 'Stay hidden in Zoom',
-        body: 'GhostWolf is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals GhostWolf.'
+        body: 'GhostWolf is hidden from most screen shares automatically (Google Meet, Teams, QuickTime \u2014 nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom \u2192 <span class="hl">Settings</span> \u2192 <span class="hl">Share Screen</span> \u2192 <span class="hl">Advanced</span> \u2192 <strong>Screen capture mode</strong> \u2192 choose <strong>\u201cAdvanced capture with window filtering.\u201d</strong><br><br>Avoid \u201c<strong>without</strong> window filtering\u201d \u2014 that mode reveals GhostWolf.'
       };
 
   const OB_STEPS = [
@@ -1901,50 +1992,9 @@
     if (!settings.onboarded) showOnboard();
 
     if (isLinux) {
-      ghostwolf.on('linux:cloak-result', (result) => {
-        const obStep = OB_STEPS.find(s => s.title === 'Stay hidden in Screen Shares');
-        if (!obStep) return;
-        
-        let html = 'GhostWolf uses an advanced X11 hook to stay hidden on Linux.<br><br>';
-        
-        if (!result.pathOk) {
-            html += '<span class="hl warning">⚠️ PATH Warning</span><br>GhostWolf wrote cloaking wrappers, but your PATH puts <code>/usr/bin</code> before <code>~/.local/bin</code>. Add <code>export PATH=~/.local/bin:$PATH</code> to your <code>~/.bashrc</code> to enable auto-cloaking.';
-        } else if (result.cloaked.length > 0 || result.skipped.length > 0) {
-            const apps = [...result.cloaked, ...result.skipped].join(', ');
-            html += `<span class="hl success">✓ Auto-cloaked</span><br>Wrappers installed for: <strong>${apps}</strong>.<br><br>Relaunch these apps from your application menu, or click the button below to restart Chrome now.`;
-            obStep.buttons = [{ 
-                label: 'Restart Chrome Cloaked', 
-                action: async () => {
-                    const btn = event.target;
-                    const oldText = btn.textContent;
-                    btn.textContent = 'Restarting...';
-                    btn.disabled = true;
-                    try {
-                        const res = await ghostwolf.linuxRecloakChrome();
-                        if (res.ok && res.relaunched) {
-                            btn.textContent = 'Restarted ✓';
-                        } else if (res.ok && !res.found) {
-                            btn.textContent = 'Chrome not running';
-                        } else {
-                            btn.textContent = 'Failed';
-                            console.error('Recloak failed:', res.error || res.reason);
-                        }
-                    } catch (e) {
-                        btn.textContent = 'Error';
-                    }
-                    setTimeout(() => { btn.textContent = oldText; btn.disabled = false; }, 3000);
-                } 
-            }];
-        } else if (result.snap.length > 0 || result.flatpak.length > 0) {
-             const sandboxed = [...result.snap, ...result.flatpak].join(', ');
-             html += `<span class="hl warning">⚠️ Sandboxed Install</span><br>${sandboxed} is installed via Snap/Flatpak. The sandbox blocks injection. See the README for the Xpra workaround.`;
-        } else {
-             html += 'No supported browsers (Chrome/Chromium) found to cloak.';
-        }
-        
-        obStep.body = html;
-        if (obIndex === OB_STEPS.indexOf(obStep)) renderOnboard();
-      });
+      // On Linux, initialise the privacy button with the correct label immediately.
+      // No IPC result is needed — privacy is renderer-only on this platform.
+      updatePrivacyBtn();
     }
   })();
 })();
