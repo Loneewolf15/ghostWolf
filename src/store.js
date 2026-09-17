@@ -48,6 +48,7 @@ const DEFAULTS = {
   // points", "casual tone". Applied to every LLM mode EXCEPT LeetCode (kept
   // strict for coding problems).
   aiRules: '',
+  userMemory: [],
   // Window position
   windowX: null,
   windowY: null,

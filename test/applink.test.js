@@ -45,15 +45,15 @@ test('reports what ghostwolf is doing', () => {
 
 /**
  * The one test in this file that matters more than the others. ghostwolf's transcript
- * is a recording of people who never agreed to share it, and the résumé and the
+ * is a recording of people who never agreed to share it, and the resume and the
  * keys are the user's. If any of them ever appear in this object they are one
  * `capture_diagnostics` away from a bug report.
  */
-test('never exposes transcript text, résumé or API keys', () => {
+test('never exposes transcript text, resume or API keys', () => {
   const serialized = JSON.stringify(describeState(snapshot()));
   assert.ok(!serialized.includes('salary'), 'transcript text leaked');
   assert.ok(!serialized.includes('hoping for something'), 'transcript text leaked');
-  assert.ok(!serialized.includes('Texas A&M'), 'résumé leaked');
+  assert.ok(!serialized.includes('Texas A&M'), 'resume leaked');
   assert.ok(!serialized.includes('sk-proj-'), 'OpenAI key leaked');
   assert.ok(!serialized.includes('AIzaSy'), 'Gemini key leaked');
 });

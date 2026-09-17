@@ -8,6 +8,7 @@
  *   - Windows: maps to SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE),
  *     supported on Windows 10 build 19041+ and Windows 11.
  *   - macOS:   maps to NSWindow sharingType = NSWindowSharingNone.
+ *     Note: Newer macOS ScreenCaptureKit behavior can sometimes bypass this.
  *   Electron itself gates these internally; no manual version check is needed.
  *
  * Linux:
@@ -48,40 +49,44 @@ function createCapturePrivacy(win) {
    * @returns {{ supported: boolean, native: boolean, platform: string, enabled: boolean, mode: string, reason?: string, error?: string }}
    */
   function enable() {
-    if (isNative) {
-      try {
-        win.setContentProtection(true);
-        return {
-          supported: true,
-          native: true,
-          platform,
-          enabled: true,
-          mode: 'native',
-        };
-      } catch (error) {
-        return {
-          supported: false,
-          native: false,
-          platform,
-          enabled: false,
-          mode: 'unavailable',
-          error: error.message,
-        };
-      }
+    if (!isNative) {
+      return {
+        supported: false,
+        native: false,
+        platform,
+        enabled: false,
+        mode: 'renderer-only',
+        reason:
+          'Electron does not currently expose native content protection for Linux. ' +
+          'GhostWolf uses renderer-level privacy mode only.',
+      };
     }
-
-    // Linux: do not attempt LD_PRELOAD, window-manager hacks,
-    // browser modification, or third-party process injection.
-    return {
-      supported: false,
-      native: false,
-      platform,
-      enabled: false,
-      mode: 'renderer-only',
-      reason:
-        'Electron does not currently expose native content protection for Linux. ' +
-        'GhostWolf uses renderer-level privacy mode only.',
-    };
+    try {
+      win.setContentProtection(true);
+      const enabled =
+        typeof win.isContentProtected === 'function'
+          ? win.isContentProtected()
+          : false;
+      return {
+        supported: true,
+        native: enabled,
+        platform,
+        enabled,
+        mode: enabled ? 'native' : 'unavailable',
+        ...(enabled
+          ? {}
+          : { error: 'Electron did not report native content protection as enabled.' }),
+      };
+    } catch (error) {
+      return {
+        supported: true,
+        native: false,
+        platform,
+        enabled: false,
+        mode: 'unavailable',
+        error: error.message,
+      };
+    }
   }
 
   /**
@@ -91,35 +96,38 @@ function createCapturePrivacy(win) {
    * @returns {{ supported: boolean, native: boolean, platform: string, enabled: boolean, mode: string, error?: string }}
    */
   function disable() {
-    if (isNative) {
-      try {
-        win.setContentProtection(false);
-        return {
-          supported: true,
-          native: true,
-          platform,
-          enabled: false,
-          mode: 'native',
-        };
-      } catch (error) {
-        return {
-          supported: false,
-          native: false,
-          platform,
-          enabled: false,
-          mode: 'unavailable',
-          error: error.message,
-        };
-      }
+    if (!isNative) {
+      return {
+        supported: false,
+        native: false,
+        platform,
+        enabled: false,
+        mode: 'renderer-only',
+      };
     }
-
-    return {
-      supported: false,
-      native: false,
-      platform,
-      enabled: false,
-      mode: 'renderer-only',
-    };
+    try {
+      win.setContentProtection(false);
+      const enabled =
+        typeof win.isContentProtected === 'function'
+          ? win.isContentProtected()
+          : false;
+      return {
+        supported: true,
+        native: !enabled,
+        platform,
+        enabled,
+        mode: 'native',
+      };
+    } catch (error) {
+      return {
+        supported: true,
+        native: false,
+        platform,
+        enabled: false,
+        mode: 'unavailable',
+        error: error.message,
+      };
+    }
   }
 
   /**

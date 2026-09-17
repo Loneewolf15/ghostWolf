@@ -179,10 +179,12 @@ function buildInterviewContext(settings, mode, transcript) {
   const workStyle = settings.workStyle || '';
   const salary    = settings.salaryTarget || '';
   const questions = settings.questionsToAsk || '';
+  const memory    = Array.isArray(settings.userMemory) ? settings.userMemory : [];
 
   const hasResume  = resume.trim().length > 0;
   const hasStories = stories.trim().length > 0;
   const hasJD      = jd.trim().length > 0;
+  const hasMemory  = memory.length > 0;
 
   const blocks = [];
 
@@ -249,6 +251,11 @@ function buildInterviewContext(settings, mode, transcript) {
       if (hasStories) blocks.push('Key Experience Highlights:\n' + clip(stories, 600));
       if (workStyle)  blocks.push('Work Style:\n' + clip(workStyle, 300));
       break;
+  }
+
+  // Inject dynamic user memory facts gathered from past interactions
+  if (hasMemory) {
+    blocks.push('=== Dynamic User Profile (Learned Facts) ===\n' + memory.map(m => '- ' + m).join('\n'));
   }
 
   if (!blocks.length) return null;

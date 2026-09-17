@@ -195,4 +195,20 @@ const MODES = {
   }
 };
 
-module.exports = { MODES, formatTranscript };
+// ── Profile Memory Extraction ────────────────────────────────────────────────
+function buildMemoryExtractionPrompt(transcript, currentMemory) {
+  const t = formatTranscript(transcript, 0);
+  const memList = currentMemory && currentMemory.length > 0
+    ? currentMemory.map(m => '- ' + m).join('\n')
+    : '(no existing memory)';
+    
+  return `Analyze this interview transcript and extract any NEW personal facts, skills, preferences, or background details about the user ("You" channel).
+Current known facts:
+${memList}
+
+Output a bulleted list of ONLY new facts. Do not repeat existing facts. Do not include conversational filler. If there is nothing new to learn, output nothing.
+Transcript:
+${t || '(none)'}`;
+}
+
+module.exports = { MODES, formatTranscript, buildMemoryExtractionPrompt };

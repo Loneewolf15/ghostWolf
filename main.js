@@ -8,7 +8,7 @@ const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
-const { MODES } = require('./src/prompts');
+const { MODES, buildMemoryExtractionPrompt } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
@@ -17,6 +17,8 @@ const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLi
 const { createMeetingStore } = require('./src/meetings');
 const { buildNotesPrompt, parseNotes } = require('./src/notes');
 const { createCapturePrivacy } = require('./src/capture-privacy');
+const { applyPlatformWindowType } = require('./src/window-options');
+const { publishGhostBounds } = process.platform === 'linux' ? require('./src/ghost-bounds') : {};
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
@@ -223,11 +225,14 @@ function createWindow() {
     }
   };
 
-  // Fix 1: On Windows, set type:'toolbar' or 'utility'.
-  // This removes the window from Alt+Tab, the taskbar.
-  if (isWindows) {
-    winOptions.type = 'toolbar';
-  }
+  // Set the platform-appropriate BrowserWindow type so screen-sharing pickers
+  // (Chrome, Zoom, Teams, OBS) exclude GhostWolf from the capturable-window list.
+  //   Windows  → type:'toolbar' removes from Alt+Tab and taskbar.
+  //   Linux    → type:'toolbar' writes _NET_WM_WINDOW_TYPE_UTILITY, excluded by
+  //              Chromium's X11 window picker (and EWMH-compliant tools).
+  //   macOS    → no type override; setContentProtection(true) handles exclusion
+  //              and 'toolbar' would break keyboard focus.
+  applyPlatformWindowType(process.platform, winOptions);
 
   win = new BrowserWindow(winOptions);
 
@@ -237,12 +242,26 @@ function createWindow() {
   win.setBackgroundColor('#00000000');
   win.setSkipTaskbar(true);
 
+  // Linux: keep /tmp/ghostwolf_bounds live so libghost.so always masks the
+  // correct screen region even when the user drags or resizes the window.
+  // publishGhostBounds writes on 'move' and 'resize' events — no polling.
+  if (isLinux && typeof publishGhostBounds === 'function') {
+    publishGhostBounds(win);
+  }
+
   // Capture privacy: native on Windows/macOS, renderer-only on Linux.
   // createCapturePrivacy() never modifies third-party processes or PATH.
   capturePrivacy = createCapturePrivacy(win);
   const shouldProtect = !process.env.GHOSTWOLF_NO_PROTECT;
   if (shouldProtect) {
     const privacyResult = capturePrivacy.enable();
+    console.log('[GhostWolf] Capture privacy result:', privacyResult);
+    if (process.platform === 'win32' && typeof win.isContentProtected === 'function') {
+      console.log(
+        '[GhostWolf] Electron isContentProtected():',
+        win.isContentProtected()
+      );
+    }
     if (privacyResult.native) {
       console.log(`[GhostWolf] Native capture protection enabled on ${process.platform}.`);
     } else {
@@ -781,6 +800,31 @@ ipcMain.handle('meetings:generate-notes', async (_e, id) => {
   }
   const notes = parseNotes(fullText);
   meetingStore.update(id, notes);
+  
+  // Background memory extraction
+  (async () => {
+    try {
+      const currentMemory = Array.isArray(settings.userMemory) ? settings.userMemory : [];
+      const memPrompt = buildMemoryExtractionPrompt(meeting.transcript, currentMemory);
+      const memLLM = createLLM(settings, handleLlmFallback);
+      if (!memLLM.ready) return;
+      const newFactsText = await memLLM.stream({
+        system: 'You are ghostwolf, a discreet meeting assistant.',
+        turns: [{ role: 'user', text: memPrompt }]
+      });
+      if (newFactsText && newFactsText.trim()) {
+        const lines = newFactsText.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
+        if (lines.length > 0) {
+          const freshMemory = [...currentMemory, ...lines];
+          store.setSettings({ userMemory: freshMemory });
+          console.log('[memory] Extracted ' + lines.length + ' new facts from meeting ' + id);
+        }
+      }
+    } catch (e) {
+      console.error('[memory] Extraction failed:', e);
+    }
+  })();
+
   return { ok: true, notes };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));

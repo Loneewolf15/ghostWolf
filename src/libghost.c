@@ -7,8 +7,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
-#include <sys/stat.h>
-#include <time.h>
+
 
 // Function pointers for the real X11 functions
 static XImage *(*real_XGetImage)(Display *display, Drawable d, int x, int y, unsigned int width, unsigned int height, unsigned long plane_mask, int format) = NULL;
@@ -73,41 +72,11 @@ static void mask_ximage(Display *display, XImage *image, int x_offset, int y_off
 
     if (inter_x1 >= inter_x2 || inter_y1 >= inter_y2) return; // No intersection
 
-    // Attempt to load camouflage background
-    static uint32_t *camo_bg = NULL;
-    static size_t camo_bg_size = 0;
-    static time_t camo_last_mtime = 0;
-    
-    struct stat st;
-    if (stat("/tmp/ghostwolf_bg.raw", &st) == 0) {
-        if (st.st_mtime != camo_last_mtime || camo_bg == NULL) {
-            FILE *f = fopen("/tmp/ghostwolf_bg.raw", "rb");
-            if (f) {
-                if (camo_bg) free(camo_bg);
-                camo_bg_size = st.st_size;
-                camo_bg = (uint32_t *)malloc(camo_bg_size);
-                fread(camo_bg, 1, camo_bg_size, f);
-                fclose(f);
-                camo_last_mtime = st.st_mtime;
-            }
-        }
-    }
-
-    int expected_size = gw * gh * 4;
-
-    // Apply camouflage or fallback to black
+    // Apply a black mask over the GhostWolf region
     if (image->bits_per_pixel == 32) {
         for (int y = inter_y1; y < inter_y2; y++) {
             uint32_t *row = (uint32_t *)(image->data + (y * image->bytes_per_line));
             for (int x = inter_x1; x < inter_x2; x++) {
-                if (camo_bg != NULL && camo_bg_size >= expected_size) {
-                    int camo_x = (x_offset + x) - gx;
-                    int camo_y = (y_offset + y) - gy;
-                    if (camo_x >= 0 && camo_x < gw && camo_y >= 0 && camo_y < gh) {
-                        row[x] = camo_bg[camo_y * gw + camo_x];
-                        continue;
-                    }
-                }
                 row[x] = 0xFF000000; // Black fallback
             }
         }
@@ -171,10 +140,4 @@ Bool XShmGetImage(Display *display, Drawable d, XImage *image, int x, int y, uns
     }
     
     return result;
-}
-
-void *dlsym(void *handle, const char *symbol) {
-    if (strcmp(symbol, "XGetImage") == 0) return (void *)XGetImage;
-    if (strcmp(symbol, "XShmGetImage") == 0) return (void *)XShmGetImage;
-    return get_real_dlsym()(handle, symbol);
 }
