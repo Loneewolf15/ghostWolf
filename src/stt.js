@@ -4,21 +4,35 @@
 const { pcmToWav } = require('./wav');
 const { formatProviderErrorMessage, isQuotaError, isConnectionError, CURRENT_GEMINI_DEFAULT } = require('./llm');
 
-const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
-  'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
-  'pipeline, container, orchestration, Ansible, Prometheus, Grafana, Helm, EKS, ECS, Lambda, ' +
-  'S3, EC2, IAM, GitHub Actions, GitLab, Kafka, PostgreSQL, Redis, MongoDB, REST API, gRPC';
+const BASE_VOCAB = 'Kubernetes, Docker, Python, TypeScript, JavaScript, SQL, API, REST, GraphQL, backend, frontend, microservices, architecture, database, system design, Git, CI/CD, cloud, AWS, GCP, Azure, Linux';
 
 function looksLikeHallucination(raw) {
   const trimmed = (raw || '').trim();
   if (!trimmed) return true;
   if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]+$/u.test(trimmed)) return true;
+  // Pure punctuation or symbols
+  if (/^[.,!?:;\-_—–…"'`~*#+=[\](){}<>/\s]+$/.test(trimmed)) return true;
+  // Bracketed or parenthesized tags (e.g. [BLANK_AUDIO], [silence], (music), (applause))
+  if (/^(\[[^\]]*\]|\([^)]*\))\s*$/i.test(trimmed)) return true;
+
   const t = trimmed.replace(/[.,!?…]+$/g, '').trim().toLowerCase();
   const artifacts = new Set([
-    'thank you', 'thank you very much', 'thank you for watching', 'thanks for watching',
-    'please subscribe', 'like and subscribe', 'bye-bye', 'bye bye', 'bye', 'you', 'okay'
+    'thank you', 'thank you very much', 'thank you for watching', 'thanks for watching', 'thank you so much',
+    'please subscribe', 'like and subscribe', 'subscribe', 'subscribe to the channel',
+    'bye-bye', 'bye bye', 'bye', 'goodbye',
+    'you', 'okay', 'so', 'oh', 'ah', 'um',
+    'blank audio', '[blank_audio]', 'silence', '[silence]'
   ]);
-  return artifacts.has(t);
+  if (artifacts.has(t)) return true;
+
+  // Subtitle / transcription credits
+  if (/^(subtitles?|caption(s|ing)?|transcribed?|translated?|synced?|encoded?)\s+(by|for)/i.test(t)) return true;
+
+  // Repetition loops (e.g. "you you you you", "the the the the")
+  const words = t.split(/\s+/);
+  if (words.length >= 4 && new Set(words).size === 1) return true;
+
+  return false;
 }
 
 function buildVocabPrompt(settings) {

@@ -1,0 +1,13 @@
+{
+  "appId": "com.ghostwolf.android",
+  "appName": "GhostWolf",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}

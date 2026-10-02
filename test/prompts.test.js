@@ -64,3 +64,11 @@ test('leetcode mode never applies AI rules (coding answers stay strict)', () => 
   assert.ok(!withRules.includes(RULES), 'leetcode must not leak user rules into the prompt');
   assert.match(withRules, /competitive programmer/);
 });
+
+test('modes enforce Claude-level independent domain accuracy and forbid shoehorning JD', () => {
+  for (const modeName of ['assist', 'say', 'ask', 'answerThis']) {
+    const system = MODES[modeName].buildSystem(null);
+    assert.match(system, /INDEPENDENT DOMAIN ACCURACY/i, `${modeName} should include independent domain accuracy rule`);
+    assert.match(system, /shoehorn/i, `${modeName} should instruct against shoehorning`);
+  }
+});

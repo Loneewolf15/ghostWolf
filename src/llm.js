@@ -17,7 +17,9 @@ const DEFAULT_MODELS = {
   ollama: 'llama3.2',
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
-  azure: 'gpt-4o-mini'
+  azure: 'gpt-4o-mini',
+  cerebras: 'llama3.1-8b',        // 2,000 tok/s on custom silicon — fastest free provider
+  glm: 'glm-4-flash',             // ZhipuAI GLM-4-Flash — $0/M tokens, permanent free tier
 };
 
 // Gemini model ids that Google has since deprecated/retired. A settings file
@@ -26,7 +28,7 @@ const DEFAULT_MODELS = {
 // otherwise an existing user would keep re-hitting the same 404 forever.
 const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
 
-const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
+const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax', cerebras: 'Cerebras', glm: 'GLM (ZhipuAI)' };
 
 function normalizeProviderName(provider) {
   if (!provider) return 'provider';
@@ -43,6 +45,13 @@ function isQuotaError(error) {
   const text = `${rawMessage} ${status || ''} ${code || ''}`.toLowerCase();
   return status === 429 || code === 429 || code === 'insufficient_quota' || code === 'rate_limit_exceeded' ||
     code === 'RESOURCE_EXHAUSTED' || /quota|billing|rate limit|exceeded your current quota|resource_exhausted|too many requests/i.test(text);
+}
+
+function isConnectionError(error) {
+  const code = error && (error.code || error.error?.code);
+  const rawMessage = (error && (error.message || String(error))) || '';
+  return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT' || code === 'ECONNRESET' ||
+    /fetch failed|network error|socket hang up|timeout|econnrefused|enotfound|etimedout/i.test(rawMessage);
 }
 
 function isNotFoundError(error) {
@@ -83,6 +92,10 @@ function formatProviderErrorMessage(error, provider, model) {
   if (isNotFoundError(error)) {
     const modelHint = model ? ` "${model}"` : '';
     return `${label} model${modelHint} is unavailable (404) — it may have been renamed, retired by the provider, or misspelled. Open Settings and pick a current model for ${label} (or clear the field to use GhostWolf's default), then try again.`;
+  }
+
+  if (isConnectionError(error)) {
+    return `${label} is unreachable (network/connection error). Check your internet connection or the provider's API status.`;
   }
 
   return rawMessage || 'Unknown LLM error.';
@@ -353,7 +366,9 @@ function createLLM(settings, onFallback = () => {}) {
   const minimaxRegion = settings.minimaxRegion || 'global_en';
   const maxTokens = settings.smart ? 1400 : 700;
 
-  const PRIORITY = ['gemini', 'aerolink', 'openai', 'anthropic', 'groq', 'minimax', 'azure', CUSTOM_PROVIDER, 'ollama'];
+  // Priority order: fastest/free providers first in the fallback chain.
+  // Cerebras and GLM are both free-tier and extremely fast, so they sit high.
+  const PRIORITY = ['gemini', 'cerebras', 'groq', 'glm', 'aerolink', 'openai', 'anthropic', 'minimax', 'azure', CUSTOM_PROVIDER, 'ollama'];
   const chain = [];
 
   // First, add all configs for the explicitly selected provider (one per key).
@@ -400,6 +415,10 @@ function createLLM(settings, onFallback = () => {}) {
           else if (c.provider === 'anthropic') res = await streamAnthropic(args);
           else if (c.provider === 'gemini') res = await streamGemini(args);
           else if (c.provider === 'azure') res = await streamAzure(args);
+          // Cerebras: OpenAI-compatible, specialized silicon inference — ~2,000 tok/s, generous free tier
+          else if (c.provider === 'cerebras') res = await streamOpenAI({ ...args, baseURL: 'https://api.cerebras.ai/v1' });
+          // GLM (ZhipuAI): GLM-4-Flash is permanently free ($0/M tokens), OpenAI-compatible
+          else if (c.provider === 'glm') res = await streamOpenAI({ ...args, baseURL: 'https://open.bigmodel.cn/api/paas/v4' });
           else throw new Error('unknown provider: ' + c.provider);
           
           if (i > 0) onFallback(c.provider, chain[0].provider);
@@ -407,9 +426,10 @@ function createLLM(settings, onFallback = () => {}) {
         } catch (error) {
           lastError = error;
           const isQuota = isQuotaError(error);
+          const isConn = isConnectionError(error);
           
-          if (isQuota && i < chain.length - 1) {
-            console.warn(`[LLM] ${c.provider} hit quota/rate-limit. Falling back to next provider in chain...`, error);
+          if ((isQuota || isConn) && i < chain.length - 1) {
+            console.warn(`[LLM] ${c.provider} hit quota or connection error. Falling back to next provider in chain...`, error);
             continue;
           }
           
@@ -423,4 +443,4 @@ function createLLM(settings, onFallback = () => {}) {
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, isConnectionError, CURRENT_GEMINI_DEFAULT };

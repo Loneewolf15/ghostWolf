@@ -122,4 +122,14 @@ test('buildInterviewContext: JD tailor note included when JD is set', () => {
   const ctx = buildInterviewContext(fullSettings, 'say', []);
   assert.ok(ctx !== null);
   assert.ok(ctx.includes('Tailor'), 'should include tailor note when JD is set');
+  assert.ok(ctx.includes('CRITICAL INDEPENDENCE RULE'), 'should include independence rule to prevent forced shoehorning');
+  assert.ok(ctx.includes('DO NOT force or shoehorn references'), 'should instruct not to shoehorn');
+});
+
+test('buildInterviewContext: injects background web research when available', () => {
+  const webContext = ['[Search results for "Acme Corp"]: Cloud native infrastructure provider.'];
+  const ctx = buildInterviewContext(fullSettings, 'say', [], webContext);
+  assert.ok(ctx !== null);
+  assert.ok(ctx.includes('=== Background Web Research ==='), 'should include web research block');
+  assert.ok(ctx.includes('Cloud native infrastructure provider'), 'should include search result snippet');
 });

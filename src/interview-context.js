@@ -165,7 +165,7 @@ function buildJDBlock(jd, limit = 600) {
  * Returns a system-prompt string with only the context fields relevant to
  * the detected interview category. Returns null for leetcode mode.
  */
-function buildInterviewContext(settings, mode, transcript) {
+function buildInterviewContext(settings, mode, transcript, activeMeetingContext = []) {
   // Coding problems never need personal context
   if (mode === 'leetcode') return null;
 
@@ -198,6 +198,11 @@ function buildInterviewContext(settings, mode, transcript) {
   // Job description — always include when available
   if (hasJD) {
     blocks.push(buildJDBlock(jd, category === 'technical' ? 300 : 600));
+  }
+
+  // Speculative Web Search context
+  if (activeMeetingContext && activeMeetingContext.length > 0) {
+    blocks.push('=== Background Web Research ===\n' + activeMeetingContext.join('\n\n') + '\n');
   }
 
   // Category-specific injections
@@ -261,7 +266,9 @@ function buildInterviewContext(settings, mode, transcript) {
   if (!blocks.length) return null;
 
   const tailorNote = hasJD
-    ? '\nTailor every answer to highlight fit with the target role above.'
+    ? '\n=== Target Role Alignment ===\n' +
+      'The Job Description above provides background context on the role. Use it to understand the technical stack and domain.\n' +
+      'CRITICAL INDEPENDENCE RULE: DO NOT force or shoehorn references to the role or job description into answers. Provide direct, independent, and accurate answers to questions. Tailor naturally only when specifically asked about role fit, company interest, or why you are a great match for this position.'
     : '';
 
   return blocks.join('\n\n') + tailorNote;

@@ -227,8 +227,13 @@ test('formatProviderErrorMessage: an OpenAI-style quota 429 (no numeric status) 
 });
 
 test('formatProviderErrorMessage: an unrecognized error passes its raw message through unchanged', () => {
+  const error = new Error('some extremely weird unknown provider error');
+  assert.equal(formatProviderErrorMessage(error, 'anthropic'), 'some extremely weird unknown provider error');
+});
+
+test('formatProviderErrorMessage: a socket hang up is classified as a connection error', () => {
   const error = new Error('socket hang up');
-  assert.equal(formatProviderErrorMessage(error, 'anthropic'), 'socket hang up');
+  assert.match(formatProviderErrorMessage(error, 'anthropic'), /Anthropic is unreachable/);
 });
 
 test('isQuotaError: agrees with formatProviderErrorMessage on what counts as quota', () => {

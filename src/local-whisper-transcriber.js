@@ -1,5 +1,6 @@
 const { UtteranceSegmenter } = require('./utterance-segmenter');
 const { WhisperServerSession } = require('./whisper-server-session');
+const { looksLikeHallucination } = require('./stt');
 
 const CHANNELS = Object.freeze(['you', 'them']);
 const DEFAULT_DRAIN_TIMEOUT_MS = 15000;
@@ -86,7 +87,7 @@ class LocalWhisperTranscriber {
     const job = this.queueTail.then(async () => {
       if (this.discardPendingJobs) return;
       const text = await this.session.transcribe(pcm);
-      if (text) this.onTranscript(channel, text);
+      if (text && !looksLikeHallucination(text)) this.onTranscript(channel, text);
     });
 
     this.queueTail = job

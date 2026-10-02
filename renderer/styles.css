@@ -67,7 +67,8 @@ body {
 #panel-wrap,
 #settings-scrim,
 #onboard-scrim,
-#consent-scrim {
+#consent-scrim,
+#gw-debug-panel {
   pointer-events: auto;
 }
 
@@ -292,7 +293,7 @@ button,
 #panel-wrap {
   position: relative;
   margin-top: 12px;
-  width: min(624px, 94vw);
+  width: calc(100vw - 48px);
   background: transparent !important;
 }
 
@@ -331,8 +332,28 @@ button:focus {
 }
 
 #panel {
+  position: relative;
   padding: 20px 22px;
   animation: overlayIn 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.panel-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 9999;
+}
+.panel-resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background: radial-gradient(circle at 100% 100%, rgba(255,255,255,0.4) 1px, transparent 1px) 0 0 / 3px 3px;
 }
 
 #panel.collapsed {
@@ -1911,6 +1932,150 @@ button:focus {
 
 .stt-error {
   color: #fca5a5;
+}
+
+/* ============================ Live Web Research Indicator ============================ */
+#research-indicator {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  backdrop-filter: blur(8px);
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 600;
+  color: #38bdf8;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  animation: fadeUp 180ms ease both;
+}
+
+#research-indicator.hidden {
+  display: none;
+}
+
+#research-indicator .research-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 6px #38bdf8;
+  animation: pulse 1.2s infinite alternate;
+}
+
+#research-indicator.done {
+  border-color: rgba(74, 222, 128, 0.4);
+  color: #4ade80;
+}
+
+#research-indicator.done .research-dot {
+  background: #4ade80;
+  box-shadow: 0 0 6px #4ade80;
+}
+
+.prep-item[data-field="research"].active {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+/* ============================ Audio Mode Badge ============================ */
+#audio-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  border: 1px solid transparent;
+}
+
+/* Auto mode — grey, subdued */
+#audio-mode-badge.audio-mode-auto {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.45);
+}
+
+/* Auto-detected meeting — green pulsing */
+#audio-mode-badge.audio-mode-auto-meeting {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+  animation: pulse 2s infinite;
+}
+
+/* Manual meeting — solid red */
+#audio-mode-badge.audio-mode-meeting {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #f87171;
+}
+
+/* Blocked — orange */
+#audio-mode-badge.audio-mode-blocked {
+  background: rgba(249, 115, 22, 0.15);
+  border-color: rgba(249, 115, 22, 0.45);
+  color: #fb923c;
+}
+
+#audio-mode-badge:hover {
+  filter: brightness(1.2);
+}
+
+/* The icon dot inside the badge */
+#audio-mode-badge .audio-mode-icon-auto::before { content: '🎙️'; font-size: 9px; }
+#audio-mode-badge .audio-mode-icon-meeting::before { content: '🔴'; font-size: 9px; }
+#audio-mode-badge .audio-mode-icon-blocked::before { content: '🚫'; font-size: 9px; }
+
+/* Control strip */
+#audio-mode-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 6px;
+  background: rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  margin-top: 2px;
+}
+
+#audio-mode-controls.hidden { display: none; }
+
+.audio-mode-ctrl-btn {
+  padding: 3px 10px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.55);
+  transition: all 0.15s;
+}
+
+.audio-mode-ctrl-btn:hover {
+  background: rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.9);
+}
+
+.audio-mode-ctrl-btn.active {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border-color: rgba(255,255,255,0.3);
 }
 
 /* ============================ Live dot states (R9) ============================ */

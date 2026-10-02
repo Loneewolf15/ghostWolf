@@ -42,6 +42,64 @@ function createCapturePrivacy(win) {
   const platform = process.platform;
   const isNative = platform === 'win32' || platform === 'darwin';
 
+  function isWindows10() {
+    if (platform !== 'win32') return false;
+    const os = require('os');
+    const release = os.release();
+    const parts = release.split('.');
+    if (parts.length >= 3) {
+      const build = parseInt(parts[2], 10);
+      return build < 22000; // Windows 11 starts at 22000
+    }
+    return false;
+  }
+
+  function applyNativeWin32Affinity(hwndBuffer, enable) {
+    const WDA_NONE             = 0x00000000;
+    const WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+    const affinity = enable ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+
+    // --- Read the raw HWND value out of the Buffer. ---
+    // win.getNativeWindowHandle() returns a Buffer whose *contents* are the
+    // numeric HWND value encoded as little-endian bytes (8 bytes on x64 Windows).
+    // We must NOT pass the Buffer directly as void* — that passes a pointer TO
+    // the buffer memory, not the HWND value itself.  We use uintptr_t so koffi
+    // treats the argument as an integer wide enough to hold a pointer.
+    let hwndValue;
+    try {
+      hwndValue = process.arch === 'x64'
+        ? hwndBuffer.readBigUInt64LE(0)   // 8-byte HWND on 64-bit Windows
+        : BigInt(hwndBuffer.readUInt32LE(0)); // 4-byte HWND on 32-bit Windows
+    } catch (readErr) {
+      console.error('[GhostWolf] Failed to read HWND from buffer:', readErr.message);
+      return false;
+    }
+
+    // --- koffi path (pure-JS, no native compilation needed) ---
+    try {
+      const koffi = require('koffi');
+      const user32 = koffi.load('user32.dll');
+      // uintptr_t is an integer type sized to hold a pointer — correct for HWND
+      const SetWindowDisplayAffinity = user32.func(
+        '__stdcall', 'SetWindowDisplayAffinity', 'bool', ['uintptr_t', 'uint32']
+      );
+      const ok = SetWindowDisplayAffinity(hwndValue, affinity);
+      console.log(`[GhostWolf] koffi SetWindowDisplayAffinity(${hwndValue}, 0x${affinity.toString(16)}) => ${ok}`);
+      if (win && win.webContents) {
+        win.webContents.send('status', {
+          message: `[Win32] SetWindowDisplayAffinity(HWND=0x${hwndValue.toString(16)}, affinity=0x${affinity.toString(16)}) => ${ok}`
+        });
+      }
+      return ok;
+    } catch (koffiErr) {
+      console.error('[GhostWolf] koffi SetWindowDisplayAffinity failed:', koffiErr.message);
+      if (win && win.webContents) {
+        win.webContents.send('status', { message: `[Win32] koffi error: ${koffiErr.message}` });
+      }
+      return false;
+    }
+  }
+
   /**
    * Enable native content protection on Windows/macOS.
    * On Linux, returns a renderer-only descriptor without modifying the system.
@@ -62,12 +120,31 @@ function createCapturePrivacy(win) {
       };
     }
     try {
-      win.setContentProtection(true);
+      if (isWindows10()) {
+        // On Windows 10, Electron's setContentProtection is broken due to a
+        // Chromium DirectComposition regression. We bypass it entirely and call
+        // SetWindowDisplayAffinity directly through koffi (no native compilation).
+        // We also call setContentProtection(true) as belt-and-suspenders in case
+        // the disable-direct-composition switch makes it work in this build.
+        const hwnd = win.getNativeWindowHandle();
+        const ffiOk = applyNativeWin32Affinity(hwnd, true);
+        if (ffiOk) {
+          console.log('[GhostWolf] Applied Windows 10 native FFI display affinity hack');
+          if (win && win.webContents) win.webContents.send('status', { message: '[Win32] FFI affinity applied successfully via koffi' });
+        } else {
+          console.warn('[GhostWolf] koffi affinity call returned false — falling back to Electron setContentProtection');
+          if (win && win.webContents) win.webContents.send('status', { message: '[Win32] koffi returned false, trying Electron setContentProtection as fallback' });
+        }
+        // Belt-and-suspenders: also call Electron's API (may now work with disable-direct-composition)
+        try { win.setContentProtection(true); } catch (_) {}
+      } else {
+        win.setContentProtection(true);
+      }
       const enabled =
         typeof win.isContentProtected === 'function'
           ? win.isContentProtected()
           : false;
-      return {
+      const result = {
         supported: true,
         native: enabled,
         platform,
@@ -77,6 +154,10 @@ function createCapturePrivacy(win) {
           ? {}
           : { error: 'Electron did not report native content protection as enabled.' }),
       };
+      if (win && win.webContents) {
+        win.webContents.send('status', { message: `[Privacy] enable() result: ${JSON.stringify(result)}` });
+      }
+      return result;
     } catch (error) {
       return {
         supported: true,
@@ -106,7 +187,12 @@ function createCapturePrivacy(win) {
       };
     }
     try {
-      win.setContentProtection(false);
+      if (isWindows10()) {
+        const hwnd = win.getNativeWindowHandle();
+        applyNativeWin32Affinity(hwnd, false);
+      } else {
+        win.setContentProtection(false);
+      }
       const enabled =
         typeof win.isContentProtected === 'function'
           ? win.isContentProtected()

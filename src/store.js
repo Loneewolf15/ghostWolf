@@ -22,6 +22,7 @@ const API_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom'
 const DEFAULTS = {
   provider: 'openai',
   sttProvider: 'auto',
+  noiseFilter: 'balanced', // 'off' | 'balanced' | 'aggressive'
   localWhisper: {
     modelId: 'base.en',
     language: 'auto',
@@ -48,6 +49,7 @@ const DEFAULTS = {
   // points", "casual tone". Applied to every LLM mode EXCEPT LeetCode (kept
   // strict for coding problems).
   aiRules: '',
+  responseMode: 'conversational',
   userMemory: [],
   // Window position
   windowX: null,

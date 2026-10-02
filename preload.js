@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   appLinkConsentRespond: (id, allowed) => ipcRenderer.send('applink:consent-response', { id, allowed }),
   pickProfileDocument: () => ipcRenderer.invoke('profile:pickDocument'),
   quit: () => ipcRenderer.send('app:quit'),
+  openDevTools: () => ipcRenderer.send('devtools:open'),
   getHardwareId: () => ipcRenderer.invoke('license:get-hardware-id'),
   verifyAndSaveLicense: (key) => ipcRenderer.invoke('license:verify', key),
   permissionsCheck: () => ipcRenderer.invoke('permissions:check'),
@@ -45,8 +46,14 @@ contextBridge.exposeInMainWorld('ghostwolf', {
   meetingsRecentSummaries: (n) => ipcRenderer.invoke('meetings:recent-summaries', n),
   meetingsRemove: (id) => ipcRenderer.invoke('meetings:remove', id),
   meetingsGenerateNotes: (id) => ipcRenderer.invoke('meetings:generate-notes', id),
+  // Online Research
+  researchJD: (jdText) => ipcRenderer.invoke('research:jd', jdText),
+  getResearchContext: () => ipcRenderer.invoke('research:get-context'),
+  // Audio source / meeting mode
+  setMeetingMode: (mode) => ipcRenderer.invoke('meeting:set-mode', mode),
+  getMeetingStatus: () => ipcRenderer.invoke('meeting:get-status'),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'meetings:notes-token', 'research:status', 'meeting:mode'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

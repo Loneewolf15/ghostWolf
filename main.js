@@ -5,9 +5,11 @@ const fs = require('fs');
 const store = require('./src/store');
 const license = require('./src/license');
 const { captureScreenshot } = require('./src/screen');
-const { createSTT } = require('./src/stt');
+const { createSTT, looksLikeHallucination } = require('./src/stt');
+const { UtteranceSegmenter } = require('./src/utterance-segmenter');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
+const { extractEntities, searchDuckDuckGoLite, researchJobDescription } = require('./src/research.js');
 const { MODES, buildMemoryExtractionPrompt } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
@@ -17,7 +19,9 @@ const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLi
 const { createMeetingStore } = require('./src/meetings');
 const { buildNotesPrompt, parseNotes } = require('./src/notes');
 const { createCapturePrivacy } = require('./src/capture-privacy');
+const { RealtimeNoiseFilter } = require('./src/noise-filter');
 const { applyPlatformWindowType } = require('./src/window-options');
+const { AudioSourceGate } = require('./src/audio-source-gate');
 const { publishGhostBounds } = process.platform === 'linux' ? require('./src/ghost-bounds') : {};
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
@@ -25,6 +29,19 @@ const { publishGhostBounds } = process.platform === 'linux' ? require('./src/gho
 // them getDisplayMedia rejects with "Error starting capture" and meeting audio
 // silently never works. Electron 39+ wires this up itself, where this is a
 // harmless no-op. Must run before app is ready.
+// On Windows 10 (build < 22000), Chromium's modern DirectComposition swap-chain causes
+// the Desktop Window Manager to lose track of the SetWindowDisplayAffinity flag set by
+// Electron's setContentProtection(true). Forcing the legacy GDI presentation path makes
+// DWM reliably honour the exclusion flag. This is a no-op on Windows 11 and non-Windows.
+// Must run before app is ready.
+if (process.platform === 'win32') {
+  const os = require('os');
+  const buildNum = parseInt((os.release().split('.')[2] || '0'), 10);
+  if (buildNum < 22000) {
+    app.commandLine.appendSwitch('disable-direct-composition');
+    app.commandLine.appendSwitch('disable-direct-composition-layers');
+  }
+}
 if (process.platform === 'darwin') {
   app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride');
 }
@@ -54,14 +71,14 @@ let permWin = null;
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 let sttProviderKeyIndex = {}; // tracks which key index we're using for each provider (for multi-key rotation)
-const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
+let activeMeetingContext = []; // Stores background research results for current meeting
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
-const FLUSH_MS = 400;
 const STREAM_INACTIVITY_MS = 600000; // abort a stalled LLM stream so state.busy can't wedge forever
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
-const RMS_GATE = 180;
-let flushTimer = null;
+let batchSegmenters = { you: null, them: null };
+let batchQueueTail = Promise.resolve();
+let pendingBatchJobs = 0;
 let whisperModelManager = null;
 let localWhisperTranscriber = null;
 let activeWhisperModelId = null;
@@ -84,9 +101,21 @@ const vad = {
     offsetThreshold: 120,
     silenceFrames: 20,       // ~600ms for remote audio (more forgiving)
     onSpeechStart: () => send('vad:state', { channel: 'them', speaking: true }),
-    onSpeechEnd: (dur) => send('vad:state', { channel: 'them', speaking: false, durationMs: dur })
+    onSpeechEnd: (dur) => {
+      send('vad:state', { channel: 'them', speaking: false, durationMs: dur });
+      // Feed speech event into the audio gate for meeting auto-detection
+      const changed = audioSourceGate.recordSpeechEvent('them', dur);
+      if (changed) {
+        const status = audioSourceGate.getStatus();
+        send('meeting:mode', status);
+        console.log('[AudioGate] Meeting detection state changed:', status.mode);
+      }
+    }
   })
 };
+
+// Smart audio source gate — detects meetings and blocks notification audio
+const audioSourceGate = new AudioSourceGate();
 // Pre-speech ring buffers (300ms) so we never clip the start of a word
 const ringBuffers = {
   you: new AudioRingBuffer(300, 16000),
@@ -113,12 +142,61 @@ function getWhisperRuntime() {
 
 
 
+let autoAssistTimer = null;
+
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
+  if (looksLikeHallucination(text)) return;
   const turn = { channel, text: text.trim(), ts: Date.now() };
   pushTranscript(turn);
   send('transcript', turn);
   send('stt:final', { channel, text: turn.text });
+
+  // Auto-assist hook: Trigger 'say' if 'them' finishes speaking and 2500ms passes without interruption.
+  if (autoAssistTimer) { clearTimeout(autoAssistTimer); autoAssistTimer = null; }
+  if (channel === 'them') {
+    autoAssistTimer = setTimeout(() => {
+      autoAssistTimer = null;
+      if (!state.busy) runFeature('say', '');
+    }, 2500);
+  }
+
+  // Speculative Search hook: Debounced background extraction of entities
+  scheduleBackgroundResearch();
+}
+
+let researchTimer = null;
+let lastResearchedTs = 0;
+function scheduleBackgroundResearch() {
+  if (researchTimer) clearTimeout(researchTimer);
+  researchTimer = setTimeout(async () => {
+    researchTimer = null;
+    const recent = transcript.filter(t => t.ts > lastResearchedTs);
+    if (recent.length === 0) return;
+    lastResearchedTs = Date.now();
+    
+    try {
+      const settings = store.getSettings();
+      const entities = await extractEntities(recent, settings);
+      for (const entity of entities) {
+        if (!activeMeetingContext.some(c => c.includes(entity))) {
+          send('research:status', { active: true, query: entity, message: `Searching web: ${entity}…` });
+          const result = await searchDuckDuckGoLite(entity, settings);
+          if (result) {
+            activeMeetingContext.push(result);
+            if (activeMeetingContext.length > 8) activeMeetingContext.shift(); // Keep latest 8
+            send('research:status', { active: false, done: true, query: entity, snippet: result, totalCount: activeMeetingContext.length });
+            send('status', { message: `🌐 Live web research: Found context on ${entity}` });
+          } else {
+            send('research:status', { active: false, query: entity });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Background research error:', e);
+      send('research:status', { active: false, error: e.message });
+    }
+  }, 10000); // 10 seconds of debounce before checking
 }
 
 async function startLocalWhisper(settings) {
@@ -256,6 +334,7 @@ function createWindow() {
   if (shouldProtect) {
     const privacyResult = capturePrivacy.enable();
     console.log('[GhostWolf] Capture privacy result:', privacyResult);
+    if (win && win.webContents) win.webContents.send('status', { message: 'Capture privacy result: ' + JSON.stringify(privacyResult, null, 2) });
     if (process.platform === 'win32' && typeof win.isContentProtected === 'function') {
       console.log(
         '[GhostWolf] Electron isContentProtected():',
@@ -270,6 +349,12 @@ function createWindow() {
         console.log('[GhostWolf] Linux will use renderer-level privacy only.');
       }
     }
+    
+    // Fix: Re-apply the protection programmatically whenever the window visibility state changes.
+    // This resolves the Electron state-clearing bug on Windows where hide/show can reset the flag.
+    win.on('show', () => {
+      capturePrivacy.enable();
+    });
   }
 
   win.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -315,54 +400,63 @@ function createWindow() {
   });
 }
 
-// -------- STT flushing (batch mode fallback) --------
-async function flushChannel(channel) {
-  if (state.transcribing[channel]) return;
-  const chunks = buffers[channel];
-  if (!chunks.length) return;
-  const pcm = Buffer.concat(chunks);
-  buffers[channel] = [];
-  if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
-
+// -------- STT Utterance Segmentation & Queue (batch mode) --------
+function enqueueBatchUtterance(channel, pcm) {
+  if (!pcm || pcm.length < MIN_BYTES) return;
+  pendingBatchJobs += 1;
   state.transcribing[channel] = true;
-  try {
-    const settings = store.getSettings();
-    function getActiveKey(p, keys) {
-      const raw = keys[p] || '';
-      if (!raw.includes(',')) return raw;
-      const arr = raw.split(',').map(k => k.trim()).filter(Boolean);
-      return arr[sttProviderKeyIndex[p] || 0] || arr[0];
-    }
-    const activeKeys = { ...settings.apiKeys };
-    ['deepgram', 'openai', 'groq', 'gemini'].forEach(p => {
-      activeKeys[p] = getActiveKey(p, settings.apiKeys);
-    });
-    const stt = createSTT({ ...settings, apiKeys: activeKeys });
-    if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper), Deepgram, or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
-      return;
-    }
-    
-    // Circuit breaker: if we previously disabled STT due to repeated failures, stop hitting the API
-    if (sttDisabled) return;
+  send('stt:status', { provider: 'batch', channel, pending: pendingBatchJobs, status: 'transcribing' });
 
-    const res = await stt.transcribe(pcm);
-    if (res.error) {
-      handleSttError(res.error, settings);
-      return;
+  const job = batchQueueTail.then(async () => {
+    if (!state.capturing && !batchSegmenters[channel]) return;
+    try {
+      const settings = store.getSettings();
+      function getActiveKey(p, keys) {
+        const raw = keys[p] || '';
+        if (!raw.includes(',')) return raw;
+        const arr = raw.split(',').map(k => k.trim()).filter(Boolean);
+        return arr[sttProviderKeyIndex[p] || 0] || arr[0];
+      }
+      const activeKeys = { ...settings.apiKeys };
+      ['deepgram', 'openai', 'groq', 'gemini'].forEach(p => {
+        activeKeys[p] = getActiveKey(p, settings.apiKeys);
+      });
+      const stt = createSTT({ ...settings, apiKeys: activeKeys });
+      if (!stt.available) {
+        if (!sttDisabled) {
+          sttDisabled = true;
+          send('status', { message: 'No transcription key set. Add an OpenAI (Whisper), Deepgram, or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' });
+        }
+        return;
+      }
+
+      // Circuit breaker: if we previously disabled STT due to repeated failures, stop hitting the API
+      if (sttDisabled) return;
+
+      const res = await stt.transcribe(pcm);
+      if (res.error) {
+        handleSttError(res.error, settings);
+        return;
+      }
+      if (res.text && res.text.trim()) {
+        publishTranscript(channel, res.text.trim());
+      }
+    } catch (e) {
+      console.log('[stt] error', e && e.message);
+      recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'enqueueBatchUtterance', context: { channel } });
     }
-    if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
-      const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
-    }
-  } catch (e) {
-    console.log('[stt] error', e && e.message);
-    recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'flushChannel', context: { channel } });
-  } finally {
+  }).catch((err) => {
+    console.error('[stt] batch queue error', err);
+  }).finally(() => {
+    pendingBatchJobs -= 1;
     state.transcribing[channel] = false;
-  }
+    if (pendingBatchJobs === 0 && state.capturing) {
+      send('stt:status', { provider: 'batch', status: 'ready' });
+    }
+  });
+
+  batchQueueTail = job;
+  return job;
 }
 
 function handleSttError(err, settings) {
@@ -437,11 +531,34 @@ function handleSttError(err, settings) {
   }
 }
 
-function startFlushLoop() {
-  if (flushTimer) return;
-  flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, FLUSH_MS);
+function initBatchSegmenters() {
+  for (const channel of ['you', 'them']) {
+    const isRemote = channel === 'them';
+    batchSegmenters[channel] = new UtteranceSegmenter({
+      channel,
+      vadOptions: {
+        onsetThreshold: isRemote ? 180 : 200,
+        offsetThreshold: isRemote ? 110 : 120,
+        silenceFrames: isRemote ? 20 : 18
+      },
+      onSpeechState: (ch, speaking, durationMs) => {
+        send('vad:state', { channel: ch, speaking, durationMs });
+      },
+      onUtterance: (ch, pcm) => {
+        enqueueBatchUtterance(ch, pcm);
+      }
+    });
+  }
 }
-function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } }
+
+function stopBatchSegmenters() {
+  for (const ch of ['you', 'them']) {
+    if (batchSegmenters[ch]) {
+      batchSegmenters[ch].stop();
+      batchSegmenters[ch] = null;
+    }
+  }
+}
 
 // -------- streaming STT setup --------
 function initStreamingSTT() {
@@ -493,7 +610,7 @@ function initStreamingSTT() {
         stopStreamingSTT(); // close WebSockets and clear keep-alive intervals
         if (batchFallbackAvailable) {
           send('status', { message: `Streaming transcription (${err.provider}) error: ${err.message}. Falling back to batch mode.` });
-          startFlushLoop();
+          initBatchSegmenters();
         } else if (!sttDisabled) {
           sttDisabled = true;
           send('status', { message: `Transcription stopped (${err.provider}): ${err.message}. The selected provider has no batch fallback.` });
@@ -528,27 +645,50 @@ function stopStreamingSTT() {
   streamingMode = false;
 }
 
+// Real-time sub-millisecond DSP noise reduction filters
+const noiseFilters = {
+  you: new RealtimeNoiseFilter(),
+  them: new RealtimeNoiseFilter()
+};
+
 // -------- audio routing (streaming or batch) --------
 function routeAudio(channel, pcmBuffer) {
-  const buf = Buffer.from(pcmBuffer);
+  let buf = Buffer.from(pcmBuffer);
+
+  const filter = noiseFilters[channel];
+  if (filter) {
+    const s = store.getSettings();
+    filter.setMode(s.noiseFilter || 'balanced');
+    buf = filter.process(buf);
+  }
+
+  // Smart audio gate: record activity sample for meeting detection.
+  // Gate notification-like audio bursts when in meeting mode.
+  if (channel === 'them') {
+    const hasAudio = buf.length > 0;
+    audioSourceGate.recordActivitySample(hasAudio);
+    const bufMs = (buf.length / 2) / 16; // ms at 16kHz mono int16
+    if (!audioSourceGate.shouldPassThrough(channel, bufMs, buf)) {
+      return; // Blocked — notification/non-meeting audio dropped
+    }
+  }
 
   if (localWhisperTranscriber) {
     localWhisperTranscriber.push(channel, buf);
     return;
   }
 
-  // Always run through VAD for speech state detection
-  vad[channel].processChunk(buf);
-
-  // Keep pre-speech buffer
-  ringBuffers[channel].write(buf);
-
   if (streamingMode && streamingSTT[channel]) {
-    // Streaming mode: send raw PCM directly to the WebSocket
-    streamingSTT[channel].sendAudio(pcmBuffer);
+    // Streaming mode: send filtered PCM directly to the WebSocket
+    vad[channel].processChunk(buf);
+    ringBuffers[channel].write(buf);
+    streamingSTT[channel].sendAudio(buf);
   } else {
-    // Batch mode: accumulate in buffers for periodic flush
-    buffers[channel].push(buf);
+    // Batch mode: route through utterance segmenter for phrase-coherent transcription
+    if (!batchSegmenters[channel]) {
+      initBatchSegmenters();
+    }
+    batchSegmenters[channel].push(buf);
   }
 }
 
@@ -588,7 +728,7 @@ async function setCapturing(active) {
     // Try streaming first, fall back to batch
     const streaming = initStreamingSTT();
     if (!streaming) {
-      startFlushLoop();
+      initBatchSegmenters();
     }
     console.log('[GhostWolf] capture started, mode:', streaming ? 'streaming' : 'batch');
     send('capture:state', { active: true, streaming: streamingMode, mode: streaming ? 'streaming' : 'batch' });
@@ -596,11 +736,12 @@ async function setCapturing(active) {
   }
 
   state.capturing = false;
-  stopFlushLoop();
+  stopBatchSegmenters();
   stopStreamingSTT();
-  buffers.you = []; buffers.them = [];
   vad.you.reset(); vad.them.reset();
+  noiseFilters.you.reset(); noiseFilters.them.reset();
   ringBuffers.you.clear(); ringBuffers.them.clear();
+  audioSourceGate.reset(); // Reset transient detection state (manualMode preserved)
   const stoppingLocalTranscriber = localWhisperTranscriber;
   localWhisperTranscriber = null;
   send('capture:state', { active: false, streaming: false, mode: stoppingLocalTranscriber ? 'local' : 'off' });
@@ -639,7 +780,7 @@ async function runFeature(mode, userText) {
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
     const category = mode !== 'leetcode' ? detectCategory(transcript) : null;
-    send('llm:start', { userBubble, small: !!def.small, category });
+    send('llm:start', { userBubble, small: !!def.small, category, provider: llm.provider, model: llm.model });
 
     if (!llm.ready) {
       const message = llm.configurationError || ('Complete the ' + settings.provider + ' provider settings. Model: ' + (llm.model || 'unset') + '.');
@@ -665,8 +806,8 @@ async function runFeature(mode, userText) {
     }
 
     const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
-    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
+    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript, activeMeetingContext);
+    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '', settingsForPrompt.responseMode) : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
@@ -760,7 +901,9 @@ ipcMain.handle('platform:info', () => ({
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
-  return { ok: true };
+  activeMeetingContext = [];
+  lastResearchedTs = Date.now();
+  if (win && !win.isDestroyed()) win.webContents.send('transcript:cleared');
 });
 
 // -------- meetings IPC (meeting store is initialised in launchApp) --------
@@ -829,6 +972,44 @@ ipcMain.handle('meetings:generate-notes', async (_e, id) => {
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 
+// -------- Online Research IPC --------
+ipcMain.handle('research:jd', async (_e, jdText) => {
+  const settings = store.getSettings();
+  send('research:status', { active: true, query: 'Job Description' });
+  try {
+    const { queries, results } = await researchJobDescription(jdText, settings, (prog) => {
+      send('research:status', { active: prog.stage !== 'done', query: prog.query || 'Role & Tech Stack', message: prog.message });
+    });
+    for (const r of results) {
+      if (!activeMeetingContext.some(c => c.includes(r.query))) {
+        activeMeetingContext.push(r.snippet);
+        if (activeMeetingContext.length > 8) activeMeetingContext.shift();
+      }
+    }
+    send('research:status', { active: false, done: true, queries, resultsCount: results.length, totalCount: activeMeetingContext.length });
+    return { ok: true, queries, resultsCount: results.length };
+  } catch (err) {
+    console.error('JD research error:', err);
+    send('research:status', { active: false, error: err.message });
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('research:get-context', () => activeMeetingContext);
+
+// -------- Audio source / meeting mode IPC --------
+ipcMain.handle('meeting:set-mode', (_, mode) => {
+  audioSourceGate.setManualMode(mode); // 'auto' | 'meeting' | 'blocked'
+  const status = audioSourceGate.getStatus();
+  send('meeting:mode', status);
+  console.log('[AudioGate] Manual mode set:', mode, '->', status.mode);
+  return { ok: true, status };
+});
+
+ipcMain.handle('meeting:get-status', () => audioSourceGate.getStatus());
+
+
+
 // -------- Capture privacy IPC --------
 // Renderer can query/toggle content protection state via these handlers.
 ipcMain.handle('capture-privacy:status', () => {
@@ -858,6 +1039,15 @@ ipcMain.on('window:resize', (e, { width, height }) => {
   win.setContentSize(width, height, false);
 });
 ipcMain.on('app:quit', () => app.quit());
+ipcMain.on('devtools:open', () => {
+  if (win && !win.isDestroyed()) {
+    if (win.webContents.isDevToolsOpened()) {
+      win.webContents.closeDevTools();
+    } else {
+      win.webContents.openDevTools({ mode: 'detach' });
+    }
+  }
+});
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
@@ -919,6 +1109,16 @@ function registerShortcuts() {
   shortcutState.leetcode = globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   shortcutState.hide = globalShortcut.register('CommandOrControl+Shift+/', () => send('hide:toggle', {}));
   shortcutState.quit = globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+  // F12: toggle Electron DevTools in a detached window for debugging
+  globalShortcut.register('F12', () => {
+    if (win && !win.isDestroyed()) {
+      if (win.webContents.isDevToolsOpened()) {
+        win.webContents.closeDevTools();
+      } else {
+        win.webContents.openDevTools({ mode: 'detach' });
+      }
+    }
+  });
   for (const [name, wasRegistered] of Object.entries(shortcutState)) {
     if (!wasRegistered) {
       recordEvent({ level: 'warn', event: 'shortcut_unavailable', msg: 'another application holds the ' + name + ' shortcut', frame: 'registerShortcuts', context: { shortcut: name } });
@@ -1118,6 +1318,15 @@ async function startNormalBootSequence() {
   launchApp();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && !permWin && !activationWin) createWindow(); });
 }
+
+app.on('before-quit', () => {
+  // Graceful teardown: explicitly stop capture so the OS drops mic/screen indicators instantly
+  // before the windows are destroyed.
+  if (state.capturing) {
+    console.log('[GhostWolf] Graceful teardown: stopping capture streams');
+    setCapturing(false);
+  }
+});
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();

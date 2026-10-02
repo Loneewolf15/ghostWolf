@@ -10,9 +10,23 @@ function formatTranscript(turns, limit) {
   return recent.map((t) => (t.channel === 'them' ? 'Them: ' : 'You: ') + t.text).join('\n');
 }
 
-function buildSystem(base, contextBlock) {
-  if (!contextBlock) return base;
-  return contextBlock + '\n\n' + base;
+function buildSystem(base, contextBlock, responseMode = 'conversational') {
+  let modeInstructions = '';
+  switch (responseMode) {
+    case 'conversational':
+      modeInstructions = 'TONE MODE: Conversational. Make it flow like a conversation with a smart friend. Less rigid, highly natural, do not sound overly polished or rehearsed.';
+      break;
+    case 'professional':
+      modeInstructions = 'TONE MODE: Professional. Clean, concise, and structured for a formal corporate interview.';
+      break;
+    case 'technical':
+      modeInstructions = 'TONE MODE: Technical. Focus purely on engineering accuracy, using precise terminology without filler. Strip all pleasantries.';
+      break;
+  }
+  const modeContext = `\n\n=== RESPONSE STYLE ===\n${modeInstructions}\n`;
+  
+  if (!contextBlock) return base + modeContext;
+  return contextBlock + '\n\n' + base + modeContext;
 }
 
 // Apply AI rules to a system prompt if the mode wants them. LeetCode returns
@@ -24,7 +38,16 @@ function applyRules(prompt, aiRules, mode) {
 }
 
 const BASE_RULES =
-  'Always respond in clear, natural English. Never switch to Hindi or any other language unless the user explicitly asks for it. ';
+  'Always respond in clear, natural English. Never switch to Hindi or any other language unless explicitly asked. ' +
+  'CRITICAL HUMANIZER & CLAUDE-LEVEL INTELLIGENCE RULES: ' +
+  '1. Never use these words: pivotal, landscape, tapestry, delve, crucial, underscore, testament, vibrant, foster. ' +
+  '2. Never use bullet points unless explicitly asked to list things. ' +
+  '3. Do not use negative parallelisms ("It\'s not just X, it\'s Y"). ' +
+  '4. Vary sentence rhythm. Keep it conversational. Sound like a real person, not an AI. ' +
+  '5. Do not use generic filler conclusions ("the future looks bright"). ' +
+  '6. INDEPENDENT DOMAIN ACCURACY: Deliver authoritative, direct, and technically sound answers to the question asked. ' +
+  'Never artificially shoehorn or force mentions of the target role, company, or job description into answers. ' +
+  'The job description is only background context for domain alignment; answer technical, conceptual, and situational questions on their own merits with first-principles precision.\n';
 
 const MODES = {
 
@@ -34,7 +57,7 @@ const MODES = {
     userBubble: null,
     small: false,
     resumeMode: 'assist',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf, a discreet real-time copilot overlaid on the user\'s screen during an interview or coding session. ' +
         BASE_RULES +
@@ -44,11 +67,11 @@ const MODES = {
         '• MOTIVATION ("why this company/role"): Give a genuine, specific answer using their stated reasons.\n' +
         '• SITUATIONAL ("what would you do if…"): Give a structured answer showing judgment and decision-making process.\n' +
         '• EXPERIENCE ("tell me about your role at X"): Draw from the resume to give a specific, proud answer.\n' +
-        '• TECHNICAL/CONCEPTUAL: Explain clearly with examples. For LeetCode: short approach + solution + complexity.\n' +
+        '• TECHNICAL/CONCEPTUAL: Explain clearly with practical examples and independent depth. Do not shoehorn the job description. For LeetCode: short approach + solution + complexity.\n' +
         '• COMPENSATION ("salary expectations"): Use their stated target, give a confident range.\n' +
         '• "Any questions for us?": Offer 2–3 of their prepared questions.\n\n' +
         'Write in first person as if the candidate is speaking. No preamble, no "Here\'s what you could say". Just the answer.',
-        contextBlock
+        contextBlock, responseMode
       ), aiRules, 'assist');
     },
     build(ctx) {
@@ -63,7 +86,7 @@ const MODES = {
     userBubble: 'What should I say?',
     small: false,
     resumeMode: 'say',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf, whispering the perfect reply to the candidate during a live interview. ' +
         BASE_RULES +
@@ -75,9 +98,9 @@ const MODES = {
         '• SITUATIONAL: Show structured thinking — "I\'d first X, then Y, because Z".\n' +
         '• EXPERIENCE: Reference the specific role/project from their resume.\n' +
         '• COMPENSATION: State the target range confidently without over-explaining.\n' +
-        '• TECHNICAL: Give a clear, confident explanation. Use analogies for non-technical interviewers.\n\n' +
+        '• TECHNICAL: Give a clear, confident explanation with independent accuracy and practical engineering depth. Never force or shoehorn the target role or job posting into technical answers. Use analogies for non-technical interviewers.\n\n' +
         'No quotes, no preamble. Write the actual words to say. 2–5 sentences.',
-        contextBlock
+        contextBlock, responseMode
       ), aiRules, 'say');
     },
     build(ctx) {
@@ -93,13 +116,13 @@ const MODES = {
     userBubble: 'Follow-up questions',
     small: true,
     resumeMode: 'followup',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf. Suggest 2–4 sharp follow-up questions the candidate could ask the interviewer.\n' +
         'Base them on what was discussed and the candidate\'s background/target role.\n' +
         'Good follow-ups: show genuine curiosity, demonstrate research, highlight the candidate\'s strengths, or uncover role details.\n' +
         'Return as a bullet list only. No preamble.',
-        contextBlock
+        contextBlock, responseMode
       ), aiRules, 'followup');
     },
     build(ctx) {
@@ -114,12 +137,12 @@ const MODES = {
     userBubble: 'Recap',
     small: true,
     resumeMode: 'recap',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf. Summarize the interview so far:\n' +
         '• Topics covered\n• Questions asked\n• Key answers given\n• Any red flags or areas to strengthen\n' +
         'Use short bullets under bold headers. Be concise.',
-        contextBlock
+        contextBlock, responseMode
       ), aiRules, 'recap');
     },
     build(ctx) {
@@ -134,14 +157,14 @@ const MODES = {
     userBubble: null,
     small: false,
     resumeMode: 'ask',
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf, a real-time copilot with access to the candidate\'s screen and live interview. ' +
         BASE_RULES +
-        'Answer the question directly and concisely. ' +
+        'Answer the question directly and concisely with independent domain accuracy. ' +
         'When the question is about the candidate\'s background, use their actual experience. ' +
-        'When the question is conceptual, explain clearly with examples. No preamble.',
-        contextBlock
+        'When the question is conceptual or technical, explain clearly with examples without forcing references to the target role. No preamble.',
+        contextBlock, responseMode
       ), aiRules, 'ask');
     },
     build(ctx) {
@@ -156,7 +179,7 @@ const MODES = {
     userBubble: null,   // bubble set dynamically from the question text
     small: false,
     resumeMode: 'say',  // same context budget as 'say'
-    buildSystem(contextBlock, aiRules) {
+    buildSystem(contextBlock, aiRules, responseMode) {
       return applyRules(buildSystem(
         'You are ghostwolf, whispering a direct answer to the candidate for ONE specific question. ' +
         BASE_RULES +
@@ -164,12 +187,12 @@ const MODES = {
         'Rules:\n' +
         '• BEHAVIORAL ("tell me about a time…"): STAR format using real stories from the candidate\'s background. Situation → Task → Action → Result. Include metrics if available.\n' +
         '• MOTIVATION ("why this company/role"): Specific, genuine reasons from their stated preferences.\n' +
-        '• TECHNICAL: Clear explanation with a concrete example from their experience.\n' +
+        '• TECHNICAL: Clear, authoritative explanation with a concrete example from their experience. Do not shoehorn the job description.\n' +
         '• EXPERIENCE: Reference specific roles/projects from their resume.\n' +
         '• COMPENSATION: State the salary target confidently in one sentence.\n' +
         '• SITUATIONAL: Structured thinking — "First I would X, then Y, because Z."\n\n' +
         'Write in first person, as the candidate speaking. No preamble. 2–5 sentences.',
-        contextBlock
+        contextBlock, responseMode
       ), aiRules, 'answerThis');
     },
     build(ctx) {

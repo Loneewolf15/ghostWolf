@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0d0f14" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>GhostWolf</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+  <!-- ── Top Bar ───────────────────────────────────────── -->
+  <div id="topbar">
+    <div id="topbar-left">
+      <div id="logo-mark">🐺</div>
+      <span id="app-title">GhostWolf</span>
+    </div>
+    <div id="topbar-right">
+      <div id="live-dot" class="off"></div>
+      <div id="stt-badge">off</div>
+      <button id="privacy-btn" title="Toggle privacy screen lock">🔒</button>
+      <button id="settings-btn" title="Settings">⚙️</button>
+    </div>
+  </div>
+
+  <!-- ── Main Panel ─────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- AI Response Area -->
+    <div id="messages-wrap">
+      <div id="messages">
+        <div class="welcome-msg">
+          <div class="welcome-icon">🐺</div>
+          <div class="welcome-text">GhostWolf is ready.<br>Tap <strong>Start Listening</strong> to begin.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Transcript Bar -->
+    <div id="interim-bar" class="hidden">
+      <span id="interim-channel" class="channel-you">You</span>
+      <span id="interim-text"></span>
+    </div>
+
+    <!-- Action Buttons -->
+    <div id="action-row">
+      <button class="act-btn act-primary" id="btn-say">💬 What to say?</button>
+      <button class="act-btn act-secondary" id="btn-assist">⚡ Assist me</button>
+      <button class="act-btn" id="btn-followup">🔄 Follow-up</button>
+      <button class="act-btn" id="btn-recap">📋 Recap</button>
+    </div>
+
+    <!-- Custom Question Input -->
+    <div id="composer">
+      <div id="input-wrap">
+        <textarea id="input" rows="1" placeholder="Ask anything…" spellcheck="false"></textarea>
+        <button id="send-btn">➤</button>
+      </div>
+    </div>
+
+    <!-- Prep Status Pills -->
+    <div id="prep-status">
+      <span class="prep-pill" data-field="resume">📄 Resume</span>
+      <span class="prep-pill" data-field="jd">💼 JD</span>
+      <span class="prep-pill" data-field="stories">🎯 Stories</span>
+      <span class="prep-pill" data-field="salary">💰 Salary</span>
+    </div>
+  </div>
+
+  <!-- ── Bottom Controls ────────────────────────────────── -->
+  <div id="controls">
+    <button id="capture-btn" class="capture-off">
+      <span id="capture-icon">🎙️</span>
+      <span id="capture-label">Start Listening</span>
+    </button>
+    <div id="audio-mode-wrap">
+      <button id="audio-mode-btn" title="Audio source">🎧 Mic + System</button>
+    </div>
+    <button id="clear-btn" title="Clear conversation">🗑️</button>
+  </div>
+
+  <!-- ── Settings Panel ─────────────────────────────────── -->
+  <div id="settings-scrim" class="hidden">
+    <div id="settings-panel">
+      <div class="sp-header">
+        <span>Settings</span>
+        <button id="settings-close">✕</button>
+      </div>
+
+      <div class="sp-tabs">
+        <button class="sp-tab active" data-tab="keys">🔑 Keys</button>
+        <button class="sp-tab" data-tab="profile">📄 Profile</button>
+        <button class="sp-tab" data-tab="prep">🎯 Prep</button>
+        <button class="sp-tab" data-tab="style">✨ Style</button>
+      </div>
+
+      <!-- Keys Tab -->
+      <div class="sp-pane active" data-pane="keys">
+        <label class="sp-label">LLM Provider</label>
+        <div class="sp-seg" id="provider-seg">
+          <button data-provider="groq" class="active">Groq ⚡</button>
+          <button data-provider="gemini">Gemini</button>
+          <button data-provider="openai">OpenAI</button>
+          <button data-provider="cerebras">Cerebras</button>
+          <button data-provider="glm">GLM</button>
+        </div>
+        <label class="sp-label">Groq API Key</label>
+        <input class="sp-input" id="key-groq" type="password" placeholder="gsk_…" autocomplete="off" />
+        <label class="sp-label">Gemini API Key</label>
+        <input class="sp-input" id="key-gemini" type="password" placeholder="AIza…" autocomplete="off" />
+        <label class="sp-label">OpenAI API Key</label>
+        <input class="sp-input" id="key-openai" type="password" placeholder="sk-…" autocomplete="off" />
+        <label class="sp-label">Cerebras API Key</label>
+        <input class="sp-input" id="key-cerebras" type="password" placeholder="csk-…" autocomplete="off" />
+        <label class="sp-label">GLM / ZhipuAI API Key</label>
+        <input class="sp-input" id="key-glm" type="password" placeholder="…" autocomplete="off" />
+
+        <div class="sp-divider"></div>
+        <label class="sp-label">STT Provider (Speech-to-Text)</label>
+        <div class="sp-seg" id="stt-seg">
+          <button data-stt="groq-whisper" class="active">Groq Whisper</button>
+          <button data-stt="openai-whisper">OpenAI Whisper</button>
+          <button data-stt="webspeech">Web Speech</button>
+        </div>
+
+        <label class="sp-label">LLM Model</label>
+        <input class="sp-input" id="model-input" type="text" placeholder="auto (llama-3.1-8b-instant for Groq)" autocomplete="off" />
+        <button class="sp-save-btn" id="keys-save">Save Keys</button>
+      </div>
+
+      <!-- Profile Tab -->
+      <div class="sp-pane hidden" data-pane="profile">
+        <label class="sp-label">Your Resume</label>
+        <textarea class="sp-textarea" id="resume-text" rows="7" placeholder="Paste your full resume here…" spellcheck="false"></textarea>
+        <label class="sp-label">Target Job Description</label>
+        <textarea class="sp-textarea" id="job-description" rows="5" placeholder="Paste the job description…" spellcheck="false"></textarea>
+        <button class="sp-save-btn" id="profile-save">Save Profile</button>
+      </div>
+
+      <!-- Prep Tab -->
+      <div class="sp-pane hidden" data-pane="prep">
+        <label class="sp-label">STAR Stories</label>
+        <textarea class="sp-textarea" id="star-stories" rows="7" placeholder="Story 1: At [Company], I faced [situation]…" spellcheck="false"></textarea>
+        <label class="sp-label">Why this company</label>
+        <textarea class="sp-textarea" id="why-company" rows="3" placeholder="I admire how [company] has…" spellcheck="false"></textarea>
+        <label class="sp-label">Salary Target</label>
+        <input class="sp-input" id="salary-target" type="text" placeholder="e.g. $150k–$180k base" />
+        <label class="sp-label">Questions to ask interviewer</label>
+        <textarea class="sp-textarea" id="questions-to-ask" rows="4" placeholder="- What does success look like in the first 90 days?&#10;- …" spellcheck="false"></textarea>
+        <button class="sp-save-btn" id="prep-save">Save Prep</button>
+      </div>
+
+      <!-- Style Tab -->
+      <div class="sp-pane hidden" data-pane="style">
+        <label class="sp-label">Response Tone</label>
+        <select class="sp-select" id="response-mode">
+          <option value="conversational">Conversational (Smart Friend)</option>
+          <option value="professional">Professional (Corporate)</option>
+          <option value="technical">Technical (Engineering Facts)</option>
+        </select>
+        <label class="sp-label">AI Rules</label>
+        <textarea class="sp-textarea" id="ai-rules" rows="8" maxlength="2000" placeholder="e.g.&#10;- Never use em-dashes.&#10;- Reply in 2-3 bullet points.&#10;- Use casual, first-person tone." spellcheck="false"></textarea>
+        <div class="sp-counter"><span id="ai-rules-count">0</span> / 2000</div>
+        <button class="sp-save-btn" id="style-save">Save Style</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Privacy Overlay ────────────────────────────────── -->
+  <div id="privacy-overlay" class="hidden">
+    <div id="privacy-content">
+      <div style="font-size:48px">🔒</div>
+      <div>Privacy Mode Active</div>
+      <div style="font-size:13px;opacity:0.6;margin-top:8px">Content hidden from screen capture</div>
+      <button id="privacy-off-btn" style="margin-top:20px;padding:10px 24px;border-radius:20px;background:rgba(255,255,255,0.15);color:#fff;border:none;font-size:15px;cursor:pointer;">Reveal</button>
+    </div>
+  </div>
+
+  <script src="js/storage.js"></script>
+  <script src="js/llm-mobile.js"></script>
+  <script src="js/stt-mobile.js"></script>
+  <script src="js/interview-context-mobile.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

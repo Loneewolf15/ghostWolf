@@ -12,6 +12,7 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
+  $('#quit-btn').addEventListener('click', () => ghostwolf.quit());
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
@@ -591,8 +592,27 @@
 
   // Clear transcript
   const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
+  let clearConfirmTimeout = null;
   if (clearTranscriptBtn) {
     clearTranscriptBtn.addEventListener('click', async () => {
+      if (!clearConfirmTimeout) {
+        // First click: prompt for confirmation
+        clearTranscriptBtn.textContent = 'Are you sure?';
+        clearTranscriptBtn.style.color = 'var(--ui-error)';
+        clearConfirmTimeout = setTimeout(() => {
+          clearTranscriptBtn.textContent = 'Clear History';
+          clearTranscriptBtn.style.color = '';
+          clearConfirmTimeout = null;
+        }, 3000);
+        return;
+      }
+      
+      // Second click: actually clear it
+      clearTimeout(clearConfirmTimeout);
+      clearConfirmTimeout = null;
+      clearTranscriptBtn.textContent = 'Clear History';
+      clearTranscriptBtn.style.color = '';
+
       // Save current input to history before clearing (for undo)
       saveToQuestionHistory(input.value);
       
@@ -1110,7 +1130,15 @@
   ghostwolf.on('vad:state', ({ channel, speaking }) => {
     setLiveDotState(speaking ? 'speaking' : 'idle');
   });
-  ghostwolf.on('llm:start', ({ userBubble, small, category }) => {
+  ghostwolf.on('llm:start', ({ userBubble, small, category, provider, model }) => {
+    isTyping = true;
+    currentLlmBubble = null;
+    clearError();
+    const ind = document.getElementById('active-model-indicator');
+    if (ind && provider && model) {
+      ind.textContent = `Using ${provider} (${model})`;
+      ind.style.display = 'block';
+    }
     responseCount++;
     if (responseCount > MAX_RESPONSES) {
       const oldest = messages.querySelector('.response-group');
@@ -1202,7 +1230,116 @@
     }
   });
 
+  // ---- Live Web Research Status -----------------------------------------
+  let researchHideTimer = null;
+  ghostwolf.on('research:status', (data) => {
+    const indicator = document.getElementById('research-indicator');
+    const text = document.getElementById('research-indicator-text');
+    const prepItem = document.getElementById('prep-item-research');
+
+    if (data.active) {
+      if (indicator && text) {
+        clearTimeout(researchHideTimer);
+        indicator.classList.remove('hidden', 'done');
+        indicator.classList.add('active');
+        text.textContent = data.message || `Searching web: ${data.query}…`;
+      }
+    } else if (data.done) {
+      if (indicator && text) {
+        clearTimeout(researchHideTimer);
+        indicator.classList.remove('active');
+        indicator.classList.add('done');
+        text.textContent = `✓ Intel: ${data.query || 'Context gathered'}`;
+        researchHideTimer = setTimeout(() => {
+          indicator.classList.add('hidden');
+        }, 5000);
+      }
+      if (prepItem) {
+        prepItem.classList.remove('hidden');
+        prepItem.classList.add('active', 'loaded');
+        prepItem.classList.remove('missing');
+        prepItem.title = `Online intel active (${data.totalCount || data.resultsCount || 1} sources)`;
+      }
+      if (data.query && data.snippet) {
+        showToast(`🌐 Live web intel gathered: ${data.query}`, 3500);
+      }
+    } else if (data.error) {
+      if (indicator) indicator.classList.add('hidden');
+    }
+  });
+
   // ---- prep status & smart tooltip helpers -------------------------------
+
+
+  // ---- Audio Mode Badge & Controls ----------------------------------------
+  const AUDIO_MODE_LABELS = {
+    'auto':         { label: 'Auto',          icon: 'auto',    toast: null },
+    'auto-meeting': { label: 'Meeting (auto)', icon: 'meeting', toast: '🔴 Meeting detected — notification audio blocked' },
+    'meeting':      { label: 'Meeting',        icon: 'meeting', toast: '🔴 Meeting mode forced — notification audio blocked' },
+    'blocked':      { label: 'Blocked',        icon: 'blocked', toast: '🚫 All system audio blocked' },
+  };
+
+  function updateAudioModeBadge(status) {
+    const badge = document.getElementById('audio-mode-badge');
+    const icon  = document.getElementById('audio-mode-icon');
+    const label = document.getElementById('audio-mode-label');
+    const controls = document.getElementById('audio-mode-controls');
+    if (!badge || !icon || !label) return;
+
+    const meta = AUDIO_MODE_LABELS[status.mode] || AUDIO_MODE_LABELS['auto'];
+
+    // Update badge class
+    badge.className = `audio-mode-badge audio-mode-${status.mode}`;
+    icon.className  = `audio-mode-icon-${meta.icon}`;
+    label.textContent = meta.label;
+
+    // Update active button in strip
+    if (controls) {
+      controls.querySelectorAll('.audio-mode-ctrl-btn').forEach(btn => {
+        const bMode = btn.dataset.audioMode;
+        // In auto-meeting, the 'auto' button should still be active (it IS auto mode)
+        const isActive = bMode === status.mode || (status.mode === 'auto-meeting' && bMode === 'auto');
+        btn.classList.toggle('active', isActive);
+      });
+    }
+  }
+
+  // Toggle control strip on badge click
+  const audioModeBadge = document.getElementById('audio-mode-badge');
+  const audioModeControls = document.getElementById('audio-mode-controls');
+  if (audioModeBadge && audioModeControls) {
+    audioModeBadge.addEventListener('click', () => {
+      audioModeControls.classList.toggle('hidden');
+    });
+  }
+
+  // Wire mode buttons
+  document.querySelectorAll('[data-audio-mode]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.audioMode;
+      await ghostwolf.setMeetingMode(mode);
+      // UI updates when meeting:mode event arrives from main
+      // but we can also close the strip immediately
+      if (audioModeControls) audioModeControls.classList.add('hidden');
+    });
+  });
+
+  // Listen for meeting:mode events pushed from main process
+  ghostwolf.on('meeting:mode', (status) => {
+    const prev = document.getElementById('audio-mode-badge') &&
+                 document.getElementById('audio-mode-badge').className;
+    updateAudioModeBadge(status);
+    // Show toast on meaningful mode changes (not the initial auto state)
+    const meta = AUDIO_MODE_LABELS[status.mode];
+    if (meta && meta.toast) {
+      showToast(meta.toast, 3000);
+    }
+  });
+
+  // On load: request current status
+  ghostwolf.getMeetingStatus().then(status => {
+    if (status) updateAudioModeBadge(status);
+  }).catch(() => {});
 
 
   // ---- AI rules: live char counter + soft cap ---------------------------
@@ -1227,6 +1364,7 @@
       salary:  !!(settings.salaryTarget && settings.salaryTarget.trim())
     };
     document.querySelectorAll('#prep-status .prep-item').forEach((el) => {
+      if (el.dataset.field === 'research') return;
       const loaded = fields[el.dataset.field];
       el.classList.toggle('loaded', loaded);
       el.classList.toggle('missing', !loaded);
@@ -1305,7 +1443,7 @@
   });
 
   // ---- multi-key UI helpers -----------------------------------------------
-  const MULTI_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom', 'minimax', 'aerolink', 'ollama', 'groq', 'azure'];
+  const MULTI_KEY_PROVIDERS = ['openai', 'anthropic', 'gemini', 'deepgram', 'custom', 'minimax', 'aerolink', 'ollama', 'groq', 'azure', 'cerebras', 'glm'];
 
   /** Provider configs: placeholder and type */
   const KEY_META = {
@@ -1319,6 +1457,8 @@
     ollama:    { type: 'text',     placeholder: 'http://localhost:11434' },
     groq:      { type: 'password', placeholder: 'gsk_...' },
     azure:     { type: 'password', placeholder: 'azure key or Entra token' },
+    cerebras:  { type: 'password', placeholder: 'csk-...' },
+    glm:       { type: 'password', placeholder: 'ZhipuAI API key' },
   };
 
   /** Snapshot current inputs and write back to settings.apiKeys[provider] */
@@ -1419,6 +1559,7 @@
     const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'auto';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
+    if ($('#noise-filter')) $('#noise-filter').value = settings.noiseFilter || 'balanced';
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#job-description').value = settings.jobDescription || '';
@@ -1429,6 +1570,7 @@
     $('#work-style').value = settings.workStyle || '';
     // Style tab
     $('#ai-rules').value = settings.aiRules || '';
+    if ($('#response-mode')) $('#response-mode').value = settings.responseMode || 'conversational';
     updateAiRulesCounter();
     // Q&A tab
     $('#salary-target').value = settings.salaryTarget || '';
@@ -1486,6 +1628,57 @@
     if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
     $('#job-description').value = res.text || '';
     showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+  });
+  const researchJdBtn = document.getElementById('research-jd-btn');
+  const jdResearchStatus = document.getElementById('jd-research-status');
+  if (researchJdBtn) researchJdBtn.addEventListener('click', async () => {
+    const jdText = ($('#job-description').value || '').trim();
+    if (!jdText) {
+      showStatus('Please paste or import a job description first before researching.');
+      return;
+    }
+    const origText = researchJdBtn.textContent;
+    researchJdBtn.disabled = true;
+    researchJdBtn.textContent = 'Searching web…';
+    if (jdResearchStatus) {
+      jdResearchStatus.style.display = 'block';
+      jdResearchStatus.textContent = 'Analyzing role & company details…';
+    }
+    showStatus('Researching company, role, and domain from the web…');
+
+    try {
+      const res = await ghostwolf.researchJD(jdText);
+      if (res && res.ok) {
+        researchJdBtn.textContent = '✓ Researched';
+        const qCount = (res.queries || []).length;
+        const rCount = res.resultsCount || 0;
+        const msg = `Found ${rCount} web sources across ${qCount} topic queries. Context primed for answers.`;
+        if (jdResearchStatus) {
+          jdResearchStatus.textContent = `✓ ${msg}`;
+        }
+        showStatus(msg);
+        showToast(`🌐 Web intel collected: ${rCount} sources primed for AI answers.`, 4000);
+        const prepItem = document.getElementById('prep-item-research');
+        if (prepItem) {
+          prepItem.classList.remove('hidden');
+          prepItem.classList.add('active');
+          prepItem.classList.add('loaded');
+        }
+      } else {
+        researchJdBtn.textContent = origText;
+        if (jdResearchStatus) jdResearchStatus.textContent = 'Research notice: ' + ((res && res.error) || 'No web data found.');
+      }
+    } catch (e) {
+      researchJdBtn.textContent = origText;
+      if (jdResearchStatus) jdResearchStatus.textContent = 'Error: ' + e.message;
+    } finally {
+      researchJdBtn.disabled = false;
+      setTimeout(() => {
+        if (researchJdBtn.textContent === '✓ Researched') {
+          researchJdBtn.textContent = '🌐 Re-research JD';
+        }
+      }, 6000);
+    }
   });
 
   function statusText() {
@@ -1681,6 +1874,7 @@
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
     settings.localWhisper.language = $('#whisper-language').value || 'auto';
     settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
+    if ($('#noise-filter')) settings.noiseFilter = $('#noise-filter').value;
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
     settings.jobDescription = $('#job-description').value.trim();
@@ -1691,6 +1885,7 @@
     settings.workStyle = $('#work-style').value.trim();
     // Style tab
     settings.aiRules = $('#ai-rules').value.trim();
+    if ($('#response-mode')) settings.responseMode = $('#response-mode').value;
     // Q&A
     settings.salaryTarget = $('#salary-target').value.trim();
     settings.questionsToAsk = $('#questions-to-ask').value.trim();
@@ -1732,7 +1927,7 @@
   }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #gw-debug-panel'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -1996,5 +2191,40 @@
       // No IPC result is needed — privacy is renderer-only on this platform.
       updatePrivacyBtn();
     }
+
+    // Custom resize handle logic for frameless windows
+    const resizeHandle = document.getElementById('panel-resize-handle');
+    if (resizeHandle) {
+      let isResizing = false;
+      let startX, startY, startW, startH;
+
+      function onMouseMove(e) {
+        if (!isResizing) return;
+        const dx = e.screenX - startX;
+        const dy = e.screenY - startY;
+        const newWidth = Math.max(300, startW + dx);
+        const newHeight = Math.max(200, startH + dy);
+        window.ghostwolf.resizeWindow(newWidth, newHeight);
+      }
+
+      function onMouseUp(e) {
+        isResizing = false;
+        document.body.style.pointerEvents = '';
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      }
+
+      resizeHandle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startX = e.screenX;
+        startY = e.screenY;
+        startW = window.outerWidth;
+        startH = window.outerHeight;
+        document.body.style.pointerEvents = 'none'; // Prevent iframe/text selection during drag
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
   })();
 })();
